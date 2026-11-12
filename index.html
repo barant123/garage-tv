@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta name="theme-color" content="#0b0b0e">
+<title>Garage TV</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- HOME -->
+<section id="view-home" class="view">
+  <header class="bar">
+    <div class="brand">Garage TV</div>
+    <div class="bar-actions">
+      <button class="btn ghost" data-go="settings">Settings</button>
+    </div>
+  </header>
+
+  <div class="grid big" id="home-grid">
+    <button class="tile hero" data-go="playlist">
+      <span class="tile-icon">&#9776;</span>
+      <span class="tile-name">My Playlist</span>
+      <span class="tile-sub" id="home-playlist-sub">Not set up</span>
+    </button>
+    <button class="tile hero" data-go="tv">
+      <span class="tile-icon">&#9655;</span>
+      <span class="tile-name">Live TV</span>
+      <span class="tile-sub" id="home-tv-sub">Free public channels</span>
+    </button>
+    <a class="tile hero" href="https://www.youtube.com" id="home-youtube">
+      <span class="tile-icon">&#9654;</span>
+      <span class="tile-name">YouTube</span>
+      <span class="tile-sub">Opens youtube.com</span>
+    </a>
+  </div>
+
+  <div id="home-links" class="grid links"></div>
+
+  <h2 class="section-title" id="fav-title" hidden>Favorites</h2>
+  <div class="grid" id="fav-grid"></div>
+</section>
+
+<!-- LIVE TV (curated + public US index) -->
+<section id="view-tv" class="view" hidden>
+  <header class="bar">
+    <button class="btn back" data-go="home">&#8592; Home</button>
+    <div class="title">Live TV</div>
+    <div class="bar-actions">
+      <input type="search" id="tv-search" class="search" placeholder="Search channels">
+    </div>
+  </header>
+  <div class="tabs" id="tv-tabs">
+    <button class="tab active" data-tvtab="mine">My channels</button>
+    <button class="tab" data-tvtab="public">All public US</button>
+  </div>
+  <div class="grid" id="tv-grid"></div>
+  <p class="note" id="tv-note" hidden></p>
+</section>
+
+<!-- MY PLAYLIST -->
+<section id="view-playlist" class="view" hidden>
+  <header class="bar">
+    <button class="btn back" data-go="home">&#8592; Home</button>
+    <div class="title">My Playlist</div>
+    <div class="bar-actions">
+      <input type="search" id="pl-search" class="search" placeholder="Search">
+      <button class="btn ghost" id="pl-refresh">Refresh</button>
+    </div>
+  </header>
+  <div id="pl-empty" class="empty" hidden>
+    <p>No playlist yet.</p>
+    <p class="muted">Go to Settings and add your M3U link or Xtream login. It stays on this device only.</p>
+    <button class="btn primary" data-go="settings">Open Settings</button>
+  </div>
+  <div id="pl-groups" class="chips"></div>
+  <div class="grid" id="pl-grid"></div>
+  <p class="note" id="pl-note" hidden></p>
+</section>
+
+<!-- PLAYER -->
+<section id="view-player" class="view player" hidden>
+  <video id="video" playsinline controls></video>
+  <div class="overlay" id="overlay">
+    <div class="overlay-top">
+      <button class="btn back" id="player-back">&#8592; Back</button>
+      <div class="title" id="player-title"></div>
+      <button class="btn ghost" id="player-fav">&#9734;</button>
+    </div>
+    <div class="overlay-mid">
+      <button class="btn huge" id="player-prev">&#8249;</button>
+      <button class="btn huge" id="player-next">&#8250;</button>
+    </div>
+    <div class="overlay-msg" id="player-msg" hidden></div>
+  </div>
+</section>
+
+<!-- SETTINGS -->
+<section id="view-settings" class="view" hidden>
+  <header class="bar">
+    <button class="btn back" data-go="home">&#8592; Home</button>
+    <div class="title">Settings</div>
+  </header>
+
+  <div class="form">
+    <h2>Playlist source</h2>
+    <p class="muted">Pick one. Nothing here is sent anywhere except to your provider when loading the list.</p>
+
+    <label class="field">
+      <span>M3U link</span>
+      <input type="url" id="s-m3u" placeholder="https://provider.example/get.php?...&type=m3u_plus&output=m3u8">
+    </label>
+
+    <div class="or">or Xtream login</div>
+
+    <label class="field">
+      <span>Xtream server (with http:// or https:// and port)</span>
+      <input type="url" id="s-xhost" placeholder="http://host.example:8080">
+    </label>
+    <div class="row">
+      <label class="field"><span>Username</span><input type="text" id="s-xuser" autocomplete="off"></label>
+      <label class="field"><span>Password</span><input type="password" id="s-xpass" autocomplete="off"></label>
+    </div>
+
+    <div class="row">
+      <button class="btn primary" id="s-save">Save on this device</button>
+      <button class="btn ghost" id="s-load">Load playlist now</button>
+    </div>
+    <p class="note" id="s-status" hidden></p>
+
+    <h2>Import a playlist file (on a PC)</h2>
+    <p class="muted">If the link cannot be fetched in the browser (your provider blocks it), download the .m3u file on your PC and import it here. The channel list is then saved on this device and can go into the car bookmark below.</p>
+    <input type="file" id="s-file" accept=".m3u,.m3u8,text/plain">
+
+    <h2>Car bookmark (no typing in the car)</h2>
+    <p class="muted">Encrypts your playlist settings with a key that lives only in the bookmark. Save the file as <code>config.enc</code> in the site folder, publish it, then bookmark the link below in the car. Anyone opening the plain site gets nothing.</p>
+    <div class="row">
+      <button class="btn primary" id="s-makekey">Make car bookmark</button>
+      <button class="btn ghost" id="s-download" hidden>Download config.enc</button>
+    </div>
+    <label class="field" id="s-bookmark-wrap" hidden>
+      <span>Bookmark this in the car</span>
+      <input type="text" id="s-bookmark" readonly>
+    </label>
+    <label class="field" id="s-enc-wrap" hidden>
+      <span>config.enc contents (or use the download button)</span>
+      <textarea id="s-enc" rows="4" readonly></textarea>
+    </label>
+
+    <h2>This device</h2>
+    <div class="row">
+      <button class="btn danger" id="s-clear">Clear everything saved here</button>
+    </div>
+    <p class="muted small" id="s-version"></p>
+  </div>
+</section>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/hls.js/1.5.17/hls.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
