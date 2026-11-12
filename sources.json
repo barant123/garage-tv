@@ -1,33 +1,122 @@
 {
   "tv": [
-    {"name": "NBC News NOW", "group": "News", "logo": "https://i.imgur.com/JZt2qh5.png", "url": "https://d1si3n1st4nkgb.cloudfront.net/10502/88896001/hls/master.m3u8?ads.xumo_channelId=88896001"},
-    {"name": "LiveNOW from FOX", "group": "News", "logo": "https://i.imgur.com/1JnyzHv.png", "url": "https://aka-live1050.delivery.roku.com/eaf7d889-16e0-4c14-a299-a2932df9f467/t2-origin/out/v1/live.m3u8"},
-    {"name": "Newsmax 2", "group": "News", "logo": "https://i.imgur.com/iE1izWq.png", "url": "https://amg00217-newsmax-newsmax-zeasn-022k9.amagi.tv/playlist.m3u8"},
-    {"name": "Cheddar News", "group": "News", "logo": "https://i.imgur.com/tuP9GW8.png", "url": "https://hls.livecdn.io/cheddar.com/cheddar/playlist.m3u8"},
-    {"name": "CNN Originals", "group": "News", "logo": "https://provider-static.plex.tv/epg/cms/production/f351d697-1e1f-4e7d-86c7-5995698e593f/CNN_Originals_ChannelLogo_Dark_1500x1000_2025_-_Grace_Hartwig.png", "url": "https://amg01918-cnnus-amg01918c2-vizio-us-9192.playouts.now.amagi.tv/playlist/amg01918-cnnus-cnnoriginals-vizious/playlist.m3u8"},
-    {"name": "Court TV", "group": "News", "logo": "https://i.imgur.com/jOKA735.png", "url": "https://cdn-uw2-prod.tsv2.amagi.tv/linear/amg01438-ewscrippscompan-courttv-tablo/playlist.m3u8"},
-    {"name": "Fox News Radio", "group": "News", "logo": "https://radio.foxnews.com/wp-content/uploads/2017/10/default_logo-150x150.png", "url": "https://radiovid.foxnews.com/hls/live/661547/RADIOVID/index.m3u8"},
-    {"name": "Bloomberg TV", "group": "Markets", "logo": "https://i.imgur.com/OuogLHx.png", "url": "https://www.bloomberg.com/media-manifest/streams/us.m3u8"},
-    {"name": "Bloomberg Originals", "group": "Markets", "logo": "https://jiotvimages.cdn.jio.com/dare_images/images/Bloomberg_Originals.png", "url": "https://www.bloomberg.com/media-manifest/streams/qt.m3u8"},
-    {"name": "FIFA+", "group": "Sports", "logo": "https://upload.wikimedia.org/wikipedia/commons/thumb/9/9c/FIFA%2B_(2025).svg/960px-FIFA%2B_(2025).svg.png", "url": "https://d2w9q46ikgrcwx.cloudfront.net/v1/master/3722c60a815c199d9c0ef36c5b73da68a62b09d1/cc-of5cbk3sav3w5/v1/sysdata_s_p_a_fifa_7/samsungheadend_us/latest/main/hls/playlist.m3u8"},
-    {"name": "Red Bull TV", "group": "Sports", "logo": "https://images.pluto.tv/channels/5e7cb84a172a0f0007da69e4/colorLogoPNG.png", "url": "https://rbmn-live.akamaized.net/hls/live/590964/BoRB-AT/master.m3u8"},
-    {"name": "Fox Weather", "group": "Weather", "logo": "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b9/Fox_Weather_logo.svg/960px-Fox_Weather_logo.svg.png", "url": "https://aka-live1050.delivery.roku.com/2ff50939-341e-4fa8-becf-718769322f14/t2-origin/out/v1/live.m3u8"},
-    {"name": "AccuWeather NOW", "group": "Weather", "logo": "https://i.imgur.com/M8wbVYK.png", "url": "https://cdn-ue1-prod.tsv2.amagi.tv/linear/amg00684-accuweather-accuweather-plex/playlist.m3u8"},
-    {"name": "DW News", "group": "World", "logo": "https://i.imgur.com/8MRNFb9.png", "url": "https://dwamdstream102.akamaized.net/hls/live/2015525/dwstream102/index.m3u8"},
-    {"name": "NBC LX Home", "group": "Lifestyle", "logo": "https://upload.wikimedia.org/wikipedia/commons/7/70/NBC_LX_Home_2023.svg", "url": "https://plex-xumoent-ch485-e7l5l.fast.nbcuni.com/live/master_5.m3u8"}
+    {
+      "name": "NBC News NOW",
+      "group": "News",
+      "logo": "https://i.imgur.com/JZt2qh5.png",
+      "url": "https://d1si3n1st4nkgb.cloudfront.net/10502/88896001/hls/master.m3u8?ads.xumo_channelId=88896001"
+    },
+    {
+      "name": "LiveNOW from FOX",
+      "group": "News",
+      "logo": "https://i.imgur.com/1JnyzHv.png",
+      "url": "https://aka-live1050.delivery.roku.com/eaf7d889-16e0-4c14-a299-a2932df9f467/t2-origin/out/v1/live.m3u8"
+    },
+    {
+      "name": "Newsmax 2",
+      "group": "News",
+      "logo": "https://i.imgur.com/iE1izWq.png",
+      "url": "https://amg00217-newsmax-newsmax-zeasn-022k9.amagi.tv/playlist.m3u8"
+    },
+    {
+      "name": "Cheddar News",
+      "group": "News",
+      "logo": "https://i.imgur.com/tuP9GW8.png",
+      "url": "https://hls.livecdn.io/cheddar.com/cheddar/playlist.m3u8"
+    },
+    {
+      "name": "CNN Originals",
+      "group": "News",
+      "logo": "https://provider-static.plex.tv/epg/cms/production/f351d697-1e1f-4e7d-86c7-5995698e593f/CNN_Originals_ChannelLogo_Dark_1500x1000_2025_-_Grace_Hartwig.png",
+      "url": "https://amg01918-cnnus-amg01918c2-vizio-us-9192.playouts.now.amagi.tv/playlist/amg01918-cnnus-cnnoriginals-vizious/playlist.m3u8"
+    },
+    {
+      "name": "Court TV",
+      "group": "News",
+      "logo": "https://i.imgur.com/jOKA735.png",
+      "url": "https://cdn-uw2-prod.tsv2.amagi.tv/linear/amg01438-ewscrippscompan-courttv-tablo/playlist.m3u8"
+    },
+    {
+      "name": "Fox News Radio",
+      "group": "News",
+      "logo": "https://radio.foxnews.com/wp-content/uploads/2017/10/default_logo-150x150.png",
+      "url": "https://radiovid.foxnews.com/hls/live/661547/RADIOVID/index.m3u8"
+    },
+    {
+      "name": "Bloomberg TV",
+      "group": "Markets",
+      "logo": "https://i.imgur.com/OuogLHx.png",
+      "url": "https://www.bloomberg.com/media-manifest/streams/us.m3u8"
+    },
+    {
+      "name": "Bloomberg Originals",
+      "group": "Markets",
+      "logo": "https://jiotvimages.cdn.jio.com/dare_images/images/Bloomberg_Originals.png",
+      "url": "https://www.bloomberg.com/media-manifest/streams/qt.m3u8"
+    },
+    {
+      "name": "FIFA+",
+      "group": "Sports",
+      "logo": "https://upload.wikimedia.org/wikipedia/commons/thumb/9/9c/FIFA%2B_(2025).svg/960px-FIFA%2B_(2025).svg.png",
+      "url": "https://d2w9q46ikgrcwx.cloudfront.net/v1/master/3722c60a815c199d9c0ef36c5b73da68a62b09d1/cc-of5cbk3sav3w5/v1/sysdata_s_p_a_fifa_7/samsungheadend_us/latest/main/hls/playlist.m3u8"
+    },
+    {
+      "name": "Red Bull TV",
+      "group": "Sports",
+      "logo": "https://images.pluto.tv/channels/5e7cb84a172a0f0007da69e4/colorLogoPNG.png",
+      "url": "https://rbmn-live.akamaized.net/hls/live/590964/BoRB-AT/master.m3u8"
+    },
+    {
+      "name": "Fox Weather",
+      "group": "Weather",
+      "logo": "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b9/Fox_Weather_logo.svg/960px-Fox_Weather_logo.svg.png",
+      "url": "https://aka-live1050.delivery.roku.com/2ff50939-341e-4fa8-becf-718769322f14/t2-origin/out/v1/live.m3u8"
+    },
+    {
+      "name": "AccuWeather NOW",
+      "group": "Weather",
+      "logo": "https://i.imgur.com/M8wbVYK.png",
+      "url": "https://cdn-ue1-prod.tsv2.amagi.tv/linear/amg00684-accuweather-accuweather-plex/playlist.m3u8"
+    },
+    {
+      "name": "DW News",
+      "group": "World",
+      "logo": "https://i.imgur.com/8MRNFb9.png",
+      "url": "https://dwamdstream102.akamaized.net/hls/live/2015525/dwstream102/index.m3u8"
+    },
+    {
+      "name": "NBC LX Home",
+      "group": "Lifestyle",
+      "logo": "https://upload.wikimedia.org/wikipedia/commons/7/70/NBC_LX_Home_2023.svg",
+      "url": "https://plex-xumoent-ch485-e7l5l.fast.nbcuni.com/live/master_5.m3u8"
+    }
   ],
   "youtube": {
-    "playlist": ""
+    "playlist": "",
+    "apiKey": ""
   },
   "links": [
-    {"name": "youtube.com", "url": "https://www.youtube.com"},
-    {"name": "Subscriptions", "url": "https://www.youtube.com/feed/subscriptions"},
-    {"name": "History", "url": "https://www.youtube.com/feed/history"}
+    {
+      "name": "youtube.com",
+      "url": "https://www.youtube.com"
+    }
   ],
   "markets": [
-    {"name": "NQ (NAS100 CFD, 24h)", "symbol": "OANDA:NAS100USD"},
-    {"name": "ES (SPX500 CFD, 24h)", "symbol": "OANDA:SPX500USD"},
-    {"name": "Google", "symbol": "NASDAQ:GOOGL"},
-    {"name": "NVIDIA", "symbol": "NASDAQ:NVDA"}
+    {
+      "name": "NQ (NAS100 CFD)",
+      "symbol": "OANDA:NAS100USD"
+    },
+    {
+      "name": "ES (SPX500 CFD)",
+      "symbol": "OANDA:SPX500USD"
+    },
+    {
+      "name": "Google",
+      "symbol": "NASDAQ:GOOGL"
+    },
+    {
+      "name": "NVIDIA",
+      "symbol": "NASDAQ:NVDA"
+    }
   ]
 }

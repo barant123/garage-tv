@@ -1,12 +1,15 @@
 /* Garage TV — personal media page for the Tesla browser.
-   One home page with collapsible sections (Live TV, YouTube, Markets, Calendar) that remember
-   whether they were open. Live channels play in an HLS player, the YouTube playlist plays in an
-   embedded player inside the app and remembers where you stopped. No build step, no accounts. */
+   One home page with collapsible sections that remember their state and their own preferences:
+     Live TV   local news (by location) + hand-picked channels + the public US index
+     YouTube   search, trending, categories, followed channels, playlist, history (YouTube Data API key)
+     Sports    ESPN scoreboards with favorite teams pinned on top
+     Markets   TradingView cards/chart with editable tickers + US economic calendar (data/calendar.json)
+   No build step, no accounts. Preferences live in this browser and in the car link (#p=...). */
 
 (() => {
 'use strict';
 
-const VERSION = '2.0.0';
+const VERSION = '3.0.0';
 const PUBLIC_US = 'https://iptv-org.github.io/iptv/countries/us.m3u';
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
@@ -18,16 +21,19 @@ const store = {
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
   del(k)    { try { localStorage.removeItem(k); } catch {} },
 };
+const PREF_DEFAULTS = { ytKey: '', ytList: '', follows: [], tickers: null, teams: [], loc: null };
+const UI_DEFAULTS = { open: {}, tvTab: 'local', ytTab: 'trending', spTab: 'favs', calOpen: false };
+const prefs = { ...PREF_DEFAULTS, ...store.get('prefs', {}) };
+const ui = { ...UI_DEFAULTS, ...store.get('ui', {}) };
+function savePrefs() { store.set('prefs', prefs); const l = $('#s-carlink'); if (l) l.value = carLink(); }
+function saveUI() { store.set('ui', ui); }
 
 const state = {
   sources: { tv: [], links: [], markets: [], youtube: {} },
-  cfg: store.get('cfg', {}),                 // { ytList }
   favs: store.get('favs', []),
-  resume: store.get('yt_resume', null),      // { id, title, t, d, when }
-  open: store.get('ui_open', {}),            // { tv:true, yt:true, mk:false, cal:false }
-  publicUS: null,
-  queue: [], qi: 0,
-  hls: null,
+  hist: store.get('yt_hist', []),          // [{id,title,thumb,channel,dur,t,d,when}]
+  publicUS: null, locals: null, teams: null, calendar: null,
+  queue: [], qi: 0, hls: null,
 };
 
 /* ---------- views ---------- */
@@ -42,7 +48,7 @@ function show(name, push = true, opts = {}) {
   window.scrollTo(0, 0);
   if (push) history.pushState({ view: name }, '', location.href);
   if (name === 'home') renderHome();
-  if (name === 'tv') renderTV();
+  if (name === 'tv') renderPublicTV();
   if (name === 'youtube') openYouTube(opts);
   if (name === 'settings') renderSettings();
 }
@@ -51,6 +57,8 @@ document.addEventListener('click', e => {
   const go = e.target.closest('[data-go]');
   if (go) { e.preventDefault(); show(go.dataset.go); return; }
   if (e.target.closest('[data-max]')) { toggleMax(); return; }
+  const sub = e.target.closest('.sub-head');
+  if (sub) { toggleSub(sub.parentElement); return; }
   const head = e.target.closest('.sec-head');
   if (head) toggleSection(head.parentElement);
 });
@@ -60,19 +68,27 @@ function toggleSection(sec, force) {
   const key = sec.dataset.sec;
   const open = force == null ? !sec.classList.contains('open') : force;
   sec.classList.toggle('open', open);
-  state.open[key] = open; store.set('ui_open', state.open);
-  if (open && key === 'mk') mountMarkets();
-  if (open && key === 'cal') mountEvents();
-  if (open && key === 'yt') ensureYT();
+  ui.open[key] = open; saveUI();
+  if (open) onSectionOpen(key);
+}
+function onSectionOpen(key) {
+  if (key === 'tv') renderTVTab();
+  if (key === 'yt') renderYTTab();
+  if (key === 'sp') renderSports();
+  if (key === 'mk') { mountMarkets(); if (ui.calOpen) renderCalendar(); }
+}
+function toggleSub(sub, force) {
+  const open = force == null ? !sub.classList.contains('open') : force;
+  sub.classList.toggle('open', open);
+  if (sub.dataset.sub === 'cal') { ui.calOpen = open; saveUI(); if (open) renderCalendar(); }
 }
 function applySections() {
   $$('.sec').forEach(sec => {
-    const open = !!state.open[sec.dataset.sec];
+    const open = !!ui.open[sec.dataset.sec];
     sec.classList.toggle('open', open);
-    if (open && sec.dataset.sec === 'mk') mountMarkets();
-    if (open && sec.dataset.sec === 'cal') mountEvents();
-    if (open && sec.dataset.sec === 'yt') ensureYT();
+    if (open) onSectionOpen(sec.dataset.sec);
   });
+  $('.sub[data-sub=cal]').classList.toggle('open', !!ui.calOpen);
 }
 
 /* ---------- maximize (browser full screen) ---------- */
@@ -94,7 +110,23 @@ function toggleFav(ch) {
 }
 function mixedContent(url) { return isHttpsPage && /^http:\/\//i.test(url); }
 function mmss(s) { s = Math.max(0, Math.round(s || 0)); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = s % 60; return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(x).padStart(2, '0'); }
-function initials(name) { return name.split(/\s+/).map(w => w[0]).join('').slice(0, 3).toUpperCase(); }
+function initials(name) { return String(name).split(/\s+/).map(w => w[0]).join('').slice(0, 3).toUpperCase(); }
+function ago(iso) {
+  const s = (Date.now() - new Date(iso)) / 1000;
+  if (s < 3600) return Math.max(1, Math.round(s / 60)) + 'm ago';
+  if (s < 86400) return Math.round(s / 3600) + 'h ago';
+  if (s < 86400 * 30) return Math.round(s / 86400) + 'd ago';
+  if (s < 86400 * 365) return Math.round(s / 86400 / 30) + 'mo ago';
+  return Math.round(s / 86400 / 365) + 'y ago';
+}
+function fmtNum(n) { n = +n || 0; return n >= 1e6 ? (n / 1e6).toFixed(1).replace(/\.0$/, '') + 'M' : n >= 1e3 ? Math.round(n / 1e3) + 'K' : String(n); }
+function parseDur(iso) { const m = /PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/.exec(iso || ''); return m ? (+m[1] || 0) * 3600 + (+m[2] || 0) * 60 + (+m[3] || 0) : 0; }
+function pills(container, attr, value) { $$('.pill', container).forEach(p => p.classList.toggle('active', p.dataset[attr] === value)); }
+async function getJSON(url, opts) { const r = await fetch(url, opts); if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); }
+const b64u = {
+  enc: s => btoa(unescape(encodeURIComponent(s))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''),
+  dec: s => decodeURIComponent(escape(atob(s.replace(/-/g, '+').replace(/_/g, '/')))),
+};
 
 function channelCard(ch, opts = {}) {
   const el = document.createElement('div');
@@ -108,7 +140,7 @@ function channelCard(ch, opts = {}) {
     `<span class="name">${esc(ch.name)}</span>`;
   el.addEventListener('click', e => {
     const star = e.target.closest('.fav');
-    if (star) { toggleFav(ch); star.classList.toggle('on', isFav(ch)); star.innerHTML = isFav(ch) ? '&#9733;' : '&#9734;'; if (current === 'home') renderHome(); return; }
+    if (star) { toggleFav(ch); star.classList.toggle('on', isFav(ch)); star.innerHTML = isFav(ch) ? '&#9733;' : '&#9734;'; if (current === 'home') renderTVTab(); return; }
     play(ch, el.__queue || [ch]);
   });
   return el;
@@ -125,11 +157,8 @@ function filterList(list, q) {
   if (!q) return list;
   return list.filter(ch => (ch.name + ' ' + (ch.group || '')).toLowerCase().includes(q));
 }
-
-/* ---------- M3U (public index) ---------- */
 function parseM3U(text) {
-  const out = [];
-  let meta = null;
+  const out = []; let meta = null;
   for (const raw of text.split(/\r?\n/)) {
     const line = raw.trim();
     if (!line) continue;
@@ -138,12 +167,8 @@ function parseM3U(text) {
       line.replace(/([\w-]+)="([^"]*)"/g, (_, k, v) => { attrs[k] = v; return ''; });
       const name = line.slice(line.lastIndexOf(',') + 1).trim() || attrs['tvg-name'] || 'Channel';
       meta = { name, group: (attrs['group-title'] || '').split(';')[0], logo: attrs['tvg-logo'] || '' };
-    } else if (line.startsWith('#')) {
-      continue;
-    } else if (meta) {
-      out.push({ ...meta, url: line });
-      meta = null;
-    }
+    } else if (line.startsWith('#')) continue;
+    else if (meta) { out.push({ ...meta, url: line }); meta = null; }
   }
   return out;
 }
@@ -156,19 +181,459 @@ function tickClock() {
 }
 setInterval(tickClock, 15000); tickClock();
 
-/* ---------- TradingView widgets (free embeds, no key) ---------- */
+/* ======================================================================
+   HOME
+   ====================================================================== */
+function renderHome() {
+  renderResume();
+  $('#tv-meta').textContent = (prefs.loc ? locLabel(prefs.loc) + ' · ' : '') + `${state.sources.tv.length} channels`;
+  $('#yt-meta').textContent = prefs.ytKey ? (prefs.follows.length ? `${prefs.follows.length} channels followed` : 'search · trending') : 'needs API key';
+  $('#sp-meta').textContent = prefs.teams.length ? prefs.teams.map(t => t.abbr).join(' · ') : 'pick your teams';
+  $('#mk-meta').textContent = tickers().map(m => m.name.split(' ')[0]).join(' · ');
+}
+
+/* ======================================================================
+   LIVE TV: local news, my channels, public list
+   ====================================================================== */
+const STATES = { AL: 'Alabama', AK: 'Alaska', AZ: 'Arizona', AR: 'Arkansas', CA: 'California', CO: 'Colorado', CT: 'Connecticut', DE: 'Delaware', DC: 'Washington DC', FL: 'Florida', GA: 'Georgia', HI: 'Hawaii', ID: 'Idaho', IL: 'Illinois', IN: 'Indiana', IA: 'Iowa', KS: 'Kansas', KY: 'Kentucky', LA: 'Louisiana', ME: 'Maine', MD: 'Maryland', MA: 'Massachusetts', MI: 'Michigan', MN: 'Minnesota', MS: 'Mississippi', MO: 'Missouri', MT: 'Montana', NE: 'Nebraska', NV: 'Nevada', NH: 'New Hampshire', NJ: 'New Jersey', NM: 'New Mexico', NY: 'New York', NC: 'North Carolina', ND: 'North Dakota', OH: 'Ohio', OK: 'Oklahoma', OR: 'Oregon', PA: 'Pennsylvania', RI: 'Rhode Island', SC: 'South Carolina', SD: 'South Dakota', TN: 'Tennessee', TX: 'Texas', UT: 'Utah', VT: 'Vermont', VA: 'Virginia', WA: 'Washington', WV: 'West Virginia', WI: 'Wisconsin', WY: 'Wyoming', PR: 'Puerto Rico' };
+function locLabel(loc) { return loc ? (loc.city ? loc.city + ', ' : '') + loc.state : ''; }
+
+function renderTVTab() {
+  pills($('#tv-pills'), 'tvtab', ui.tvTab);
+  $('#tv-local').hidden = ui.tvTab !== 'local';
+  $('#tv-mine').hidden = ui.tvTab !== 'mine';
+  if (ui.tvTab === 'mine') {
+    const mine = state.sources.tv;
+    const extra = state.favs.filter(f => !mine.some(c => c.url === f.url));
+    const list = mine.concat(extra);
+    renderCards($('#tv-cards'), list, ch => extra.includes(ch) ? { tag: 'fav', star: true } : { tag: ch.group || '' });
+  } else renderLocal();
+}
+$('#tv-pills').addEventListener('click', e => { const p = e.target.closest('[data-tvtab]'); if (p) { ui.tvTab = p.dataset.tvtab; saveUI(); renderTVTab(); } });
+
+async function loadLocals() {
+  if (state.locals) return state.locals;
+  const d = await getJSON('data/locals.json', { cache: 'no-store' });
+  state.locals = d.stations || [];
+  return state.locals;
+}
+async function detectLocation() {
+  const cached = store.get('loc_auto', null);
+  if (cached && Date.now() - cached.at < 12 * 3600e3) return cached.loc;
+  const d = await getJSON('https://ipapi.co/json/');
+  if (d.country_code !== 'US') throw new Error('Outside the US (' + d.country_name + ')');
+  const loc = { state: d.region_code, city: d.city, auto: true };
+  store.set('loc_auto', { at: Date.now(), loc });
+  return loc;
+}
+async function renderLocal() {
+  const hint = $('#local-hint'), grid = $('#local-cards');
+  try {
+    if (!prefs.loc) {
+      hint.textContent = 'Finding your location…';
+      prefs.loc = await detectLocation(); savePrefs();
+    }
+    hint.textContent = 'Loading local stations…';
+    const all = await loadLocals();
+    const loc = prefs.loc;
+    const inState = all.filter(s => s.states.includes(loc.state));
+    const score = s => (loc.city && s.cities.includes(loc.city) ? 0 : 2) + (s.cat.some(c => c === 'news' || c === 'general') ? 0 : 1);
+    const list = inState.slice().sort((a, b) => score(a) - score(b) || a.name.localeCompare(b.name))
+      .map(s => ({ name: s.name, url: s.url, logo: s.logo, group: s.cities[0] || STATES[loc.state] || loc.state, cat: s.cat }));
+    renderCards(grid, list, ch => ({ tag: ch.group, star: true }));
+    hint.textContent = list.length
+      ? `${locLabel(loc)} · ${list.length} stations ${loc.auto ? '(location from your connection)' : ''} · from the public iptv-org index, so coverage varies by city`
+      : `No stations listed for ${locLabel(loc)} in the public index. Try another city or state with "Change location".`;
+    $('#tv-meta').textContent = `${locLabel(loc)} · ${state.sources.tv.length} channels`;
+  } catch (e) {
+    hint.textContent = 'Could not load local stations: ' + e.message + '. Use "Change location" to pick a state.';
+    grid.innerHTML = '';
+  }
+}
+$('#tv-edit-btn').addEventListener('click', async () => {
+  const box = $('#tv-edit'); box.hidden = !box.hidden;
+  if (box.hidden) return;
+  await loadLocals();
+  const counts = {};
+  state.locals.forEach(s => s.states.forEach(st => { counts[st] = (counts[st] || 0) + 1; }));
+  const sel = $('#loc-state'); sel.innerHTML = Object.keys(STATES).filter(k => counts[k]).sort((a, b) => STATES[a].localeCompare(STATES[b]))
+    .map(k => `<option value="${k}">${STATES[k]} (${counts[k]})</option>`).join('');
+  sel.value = (prefs.loc && prefs.loc.state) || 'AZ';
+  fillCities(); if (prefs.loc && prefs.loc.city) $('#loc-city').value = prefs.loc.city;
+  $('#loc-note').textContent = 'Pick a state, then a city to put that city’s stations first. "Detect" uses your connection’s location.';
+});
+function fillCities() {
+  const st = $('#loc-state').value;
+  const cities = new Set(); state.locals.forEach(s => { if (s.states.includes(st)) s.cities.forEach(c => cities.add(c)); });
+  $('#loc-city').innerHTML = '<option value="">Whole state</option>' + [...cities].sort().map(c => `<option>${esc(c)}</option>`).join('');
+}
+$('#loc-state').addEventListener('change', fillCities);
+$('#loc-detect').addEventListener('click', async () => {
+  try { store.del('loc_auto'); const loc = await detectLocation(); $('#loc-state').value = loc.state; fillCities(); $('#loc-city').value = loc.city; $('#loc-note').textContent = 'Detected ' + locLabel(loc) + '. Press "Use this" to keep it.'; }
+  catch (e) { $('#loc-note').textContent = 'Could not detect: ' + e.message; }
+});
+$('#loc-save').addEventListener('click', () => {
+  prefs.loc = { state: $('#loc-state').value, city: $('#loc-city').value, auto: false }; savePrefs();
+  $('#tv-edit').hidden = true; renderLocal(); renderHome();
+});
+
+async function renderPublicTV() {
+  const note = $('#tv-note'); note.hidden = true;
+  const q = $('#tv-search').value;
+  if (!state.publicUS) {
+    $('#tv-grid').innerHTML = '<p class="muted">Loading the public US list…</p>';
+    try {
+      const r = await fetch(PUBLIC_US, { cache: 'no-store' });
+      state.publicUS = parseM3U(await r.text()).filter(ch => !/geo-blocked|not 24\/7/i.test(ch.name));
+    } catch (e) { $('#tv-grid').innerHTML = ''; note.textContent = 'Could not load the public list: ' + e.message; note.hidden = false; return; }
+  }
+  const extra = renderCards($('#tv-grid'), filterList(state.publicUS, q), ch => ({ tag: ch.group || '', star: true }));
+  if (extra) { note.textContent = extra; note.hidden = false; }
+}
+$('#tv-search').addEventListener('input', renderPublicTV);
+
+/* ======================================================================
+   YOUTUBE (Data API for browsing, IFrame API for playing inside the app)
+   ====================================================================== */
+const ytCache = {};
+async function ytApi(path, params) {
+  if (!prefs.ytKey) throw new Error('no key');
+  const u = new URL('https://www.googleapis.com/youtube/v3/' + path);
+  Object.entries(params).forEach(([k, v]) => u.searchParams.set(k, v));
+  u.searchParams.set('key', prefs.ytKey);
+  const r = await fetch(u);
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) { const reason = d.error && d.error.errors && d.error.errors[0] && d.error.errors[0].reason; throw new Error(reason === 'quotaExceeded' ? 'Daily YouTube quota used up; resets at midnight Pacific.' : reason || ('HTTP ' + r.status)); }
+  return d;
+}
+function vidFromItem(it) {
+  const s = it.snippet || {}, th = s.thumbnails || {};
+  return { id: it.id, title: s.title || '', channel: s.channelTitle || '', thumb: (th.medium || th.high || th.default || {}).url || `https://i.ytimg.com/vi/${it.id}/mqdefault.jpg`,
+           dur: parseDur(it.contentDetails && it.contentDetails.duration), views: +(it.statistics && it.statistics.viewCount) || 0, published: s.publishedAt || '' };
+}
+async function videosByIds(ids) {
+  const out = [];
+  for (let i = 0; i < ids.length; i += 50) {
+    const d = await ytApi('videos', { part: 'snippet,contentDetails,statistics', id: ids.slice(i, i + 50).join(','), maxResults: 50 });
+    (d.items || []).forEach(it => out.push(vidFromItem(it)));
+  }
+  return out;
+}
+async function ytTrending(cat) {
+  const p = { part: 'snippet,contentDetails,statistics', chart: 'mostPopular', regionCode: 'US', maxResults: 30 };
+  if (cat) p.videoCategoryId = cat;
+  const d = await ytApi('videos', p);
+  return (d.items || []).map(vidFromItem);
+}
+async function ytSearch(q) {
+  const d = await ytApi('search', { part: 'snippet', type: 'video', q, maxResults: 24, safeSearch: 'none' });
+  return videosByIds((d.items || []).map(it => it.id.videoId));
+}
+async function ytFollowsFeed() {
+  const ids = [];
+  await Promise.all(prefs.follows.map(async ch => {
+    try { const d = await ytApi('playlistItems', { part: 'contentDetails', playlistId: 'UU' + ch.id.slice(2), maxResults: 6 }); (d.items || []).forEach(it => ids.push(it.contentDetails.videoId)); } catch {}
+  }));
+  const vids = await videosByIds(ids);
+  return vids.sort((a, b) => (b.published > a.published ? 1 : -1));
+}
+function ytListId(v) { const m = String(v || '').match(/[?&]list=([A-Za-z0-9_-]+)/); return m ? m[1] : String(v || '').trim(); }
+async function ytPlaylist() {
+  const list = ytListId(prefs.ytList);
+  if (!list) return [];
+  if (prefs.ytKey) {
+    const d = await ytApi('playlistItems', { part: 'contentDetails', playlistId: list, maxResults: 50 });
+    return videosByIds((d.items || []).map(it => it.contentDetails.videoId));
+  }
+  // no key: let the embedded player read the playlist, titles via oEmbed
+  await ensurePlayer();
+  ytPlayer.cuePlaylist({ list, listType: 'playlist' });
+  let ids = [];
+  for (let i = 0; i < 24 && !(ids = ytPlayer.getPlaylist() || []).length; i++) await new Promise(r => setTimeout(r, 250));
+  const titles = store.get('yt_titles', {});
+  await Promise.all(ids.filter(id => !titles[id]).slice(0, 50).map(async id => {
+    try { const r = await fetch(`https://www.youtube.com/oembed?url=${encodeURIComponent('https://www.youtube.com/watch?v=' + id)}&format=json`); if (r.ok) titles[id] = (await r.json()).title; } catch {}
+  }));
+  store.set('yt_titles', titles);
+  return ids.map(id => ({ id, title: titles[id] || 'Video', channel: '', thumb: `https://i.ytimg.com/vi/${id}/mqdefault.jpg`, dur: 0, views: 0, published: '' }));
+}
+
+async function renderYTTab(force) {
+  pills($('#yt-pills'), 'yttab', ui.ytTab);
+  const hint = $('#yt-hint'), grid = $('#yt-cards');
+  const needsKey = !prefs.ytKey && !['history', 'playlist'].includes(ui.ytTab);
+  $('#yt-setup').hidden = !needsKey;
+  if (needsKey) { grid.innerHTML = ''; hint.textContent = ''; return; }
+  const key = ui.ytTab + (ui.ytTab === 'search' ? ':' + ($('#yt-q').value || '') : '');
+  const c = ytCache[key];
+  if (c && !force && Date.now() - c.at < 15 * 60e3) { renderVideos(grid, c.list); hint.textContent = c.note || ''; return; }
+  hint.textContent = 'Loading…'; grid.innerHTML = '';
+  try {
+    let list = [], note = '';
+    if (ui.ytTab === 'trending') list = await ytTrending('');
+    else if (ui.ytTab.startsWith('cat:')) list = await ytTrending(ui.ytTab.slice(4));
+    else if (ui.ytTab === 'search') { const q = $('#yt-q').value.trim(); list = q ? await ytSearch(q) : []; note = q ? `Results for “${q}”` : 'Type something to search.'; }
+    else if (ui.ytTab === 'follows') { list = prefs.follows.length ? await ytFollowsFeed() : []; note = prefs.follows.length ? 'Newest from the channels you follow' : 'Tap "My channels" to follow some channels.'; }
+    else if (ui.ytTab === 'playlist') { list = await ytPlaylist(); note = list.length ? '' : (prefs.ytList ? 'Playlist is empty or private.' : 'Add a playlist link in Settings.'); }
+    else if (ui.ytTab === 'history') { list = state.hist.slice(); note = list.length ? 'Most recent first' : 'Nothing watched yet.'; }
+    ytCache[key] = { at: Date.now(), list, note };
+    renderVideos(grid, list); hint.textContent = note;
+  } catch (e) {
+    hint.textContent = (e.message === 'no key' ? 'Add a YouTube API key in Settings.' : 'YouTube said: ' + e.message);
+  }
+}
+function renderVideos(grid, list) {
+  grid.innerHTML = '';
+  const h = Object.fromEntries(state.hist.map(x => [x.id, x]));
+  list.forEach(v => {
+    const c = document.createElement('div'); c.className = 'card video'; c.setAttribute('role', 'button');
+    const hv = h[v.id], pct = hv && hv.d ? Math.min(100, Math.round(100 * hv.t / hv.d)) : 0;
+    const meta = [v.channel, v.views ? fmtNum(v.views) + ' views' : '', v.published ? ago(v.published) : ''].filter(Boolean).join(' · ');
+    c.innerHTML = `<span class="thumb"><img src="${esc(v.thumb)}" alt="" loading="lazy">` +
+      (v.dur ? `<span class="dur">${mmss(v.dur)}</span>` : '') +
+      (pct ? `<span class="prog"><i style="width:${pct}%"></i></span>` : '') +
+      `</span><span class="vt">${esc(v.title)}</span><span class="vm">${esc(meta)}</span>`;
+    c.addEventListener('click', () => show('youtube', true, { video: v, list, t: hv && hv.d - hv.t > 20 ? hv.t : 0 }));
+    grid.appendChild(c);
+  });
+  if (!list.length) grid.innerHTML = '';
+}
+$('#yt-pills').addEventListener('click', e => { const p = e.target.closest('[data-yttab]'); if (p) { ui.ytTab = p.dataset.yttab; saveUI(); renderYTTab(); } });
+$('#yt-form').addEventListener('submit', e => { e.preventDefault(); ui.ytTab = 'search'; saveUI(); pills($('#yt-pills'), 'yttab', ''); renderYTTab(true); $('#yt-q').blur(); });
+
+// followed channels editor
+$('#yt-edit-btn').addEventListener('click', () => { const b = $('#yt-edit'); b.hidden = !b.hidden; if (!b.hidden) renderFollows(); });
+function renderFollows() {
+  const box = $('#yt-follows'); box.innerHTML = prefs.follows.length ? '' : '<span class="muted small">No channels followed yet.</span>';
+  prefs.follows.forEach(ch => {
+    const c = document.createElement('span'); c.className = 'chip';
+    c.innerHTML = `${ch.thumb ? `<img src="${esc(ch.thumb)}" alt="">` : ''}${esc(ch.title)}<button class="x" title="Unfollow">&times;</button>`;
+    $('.x', c).addEventListener('click', () => { prefs.follows = prefs.follows.filter(f => f.id !== ch.id); savePrefs(); delete ytCache.follows; renderFollows(); renderHome(); });
+    box.appendChild(c);
+  });
+}
+$('#yt-chfind').addEventListener('click', findChannels);
+$('#yt-chq').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); findChannels(); } });
+async function findChannels() {
+  const q = $('#yt-chq').value.trim(), box = $('#yt-chresults');
+  if (!q) return;
+  box.innerHTML = '<span class="muted small">Searching…</span>';
+  try {
+    const d = await ytApi('search', { part: 'snippet', type: 'channel', q, maxResults: 8 });
+    box.innerHTML = '';
+    (d.items || []).forEach(it => {
+      const ch = { id: it.snippet.channelId, title: it.snippet.channelTitle || it.snippet.title, thumb: (it.snippet.thumbnails.default || {}).url || '' };
+      const c = document.createElement('button'); c.className = 'chip add';
+      c.innerHTML = `${ch.thumb ? `<img src="${esc(ch.thumb)}" alt="">` : ''}+ ${esc(ch.title)}`;
+      c.addEventListener('click', () => { if (!prefs.follows.some(f => f.id === ch.id)) { prefs.follows.push(ch); savePrefs(); delete ytCache.follows; renderFollows(); renderHome(); } c.remove(); });
+      box.appendChild(c);
+    });
+    if (!box.children.length) box.innerHTML = '<span class="muted small">No channels found.</span>';
+  } catch (e) { box.innerHTML = `<span class="muted small">${esc(e.message === 'no key' ? 'Add a YouTube API key in Settings first.' : e.message)}</span>`; }
+}
+
+/* ---- player (IFrame API) ---- */
+let ytPlayer = null, ytApiReady = null, ytTimer = null, ytPendingSeek = 0, ytCurrent = null;
+function loadYTApi() {
+  if (ytApiReady) return ytApiReady;
+  ytApiReady = new Promise(res => {
+    if (window.YT && YT.Player) return res();
+    window.onYouTubeIframeAPIReady = () => res();
+    const s = document.createElement('script'); s.src = 'https://www.youtube.com/iframe_api'; document.head.appendChild(s);
+  });
+  return ytApiReady;
+}
+async function ensurePlayer() {
+  await loadYTApi();
+  if (ytPlayer) return ytPlayer;
+  await new Promise(res => {
+    ytPlayer = new YT.Player('yt-player', {
+      width: '100%', height: '100%',
+      playerVars: { rel: 0, playsinline: 1, modestbranding: 1, enablejsapi: 1, origin: location.origin },
+      events: { onReady: () => res(), onStateChange: ytState, onError: ytError },
+    });
+  });
+  return ytPlayer;
+}
+async function openYouTube(opts = {}) {
+  await ensurePlayer();
+  if (opts.video) {
+    state.queue = opts.list || [opts.video]; state.qi = Math.max(0, state.queue.findIndex(v => v.id === opts.video.id));
+    ytCurrent = opts.video; ytPendingSeek = opts.t || 0;
+    $('#yt-title').textContent = opts.video.title || 'YouTube';
+    ytPlayer.loadVideoById({ videoId: opts.video.id, startSeconds: opts.t || 0 });
+  }
+  renderQueue();
+  clearInterval(ytTimer); ytTimer = setInterval(ytSave, 5000);
+}
+function renderQueue() {
+  const box = $('#yt-list'); box.innerHTML = '';
+  state.queue.forEach((v, i) => {
+    const b = document.createElement('button');
+    b.className = 'yt-item' + (ytCurrent && v.id === ytCurrent.id ? ' active' : '');
+    b.innerHTML = `<img src="${esc(v.thumb)}" alt="" loading="lazy"><span>${esc(v.title)}</span>`;
+    b.addEventListener('click', () => { ytSave(); state.qi = i; ytCurrent = v; ytPendingSeek = 0; $('#yt-title').textContent = v.title; ytPlayer.loadVideoById(v.id); renderQueue(); });
+    box.appendChild(b);
+  });
+}
+function ytState(e) {
+  const s = e.data;
+  if (s === YT.PlayerState.PLAYING) {
+    if (ytPendingSeek > 3) { ytPlayer.seekTo(ytPendingSeek, true); ytPendingSeek = 0; }
+    const d = ytPlayer.getVideoData() || {};
+    if (ytCurrent && d.title) { ytCurrent.title = d.title; $('#yt-title').textContent = d.title; }
+    ytSave();
+  }
+  if (s === YT.PlayerState.PAUSED) ytSave();
+  if (s === YT.PlayerState.ENDED) {
+    markHist(ytCurrent, ytPlayer.getDuration() || 0, ytPlayer.getDuration() || 0);
+    if (state.queue.length > 1) { state.qi = (state.qi + 1) % state.queue.length; const v = state.queue[state.qi]; ytCurrent = v; $('#yt-title').textContent = v.title; ytPlayer.loadVideoById(v.id); renderQueue(); }
+  }
+}
+function ytError(e) {
+  // 101/150: owner disallows embedding
+  if (ytCurrent && (e.data === 101 || e.data === 150)) {
+    $('#yt-title').innerHTML = `${esc(ytCurrent.title)} <a class="btn ghost small-btn" href="https://www.youtube.com/watch?v=${esc(ytCurrent.id)}">not embeddable, open on youtube.com &#8599;</a>`;
+  }
+}
+function markHist(v, t, d) {
+  if (!v) return;
+  state.hist = state.hist.filter(x => x.id !== v.id);
+  state.hist.unshift({ id: v.id, title: v.title, thumb: v.thumb, channel: v.channel, dur: v.dur || d, t, d, when: Date.now() });
+  state.hist = state.hist.slice(0, 40);
+  store.set('yt_hist', state.hist);
+  delete ytCache.history;
+}
+function ytSave() {
+  if (!ytPlayer || !ytPlayer.getPlayerState || !ytCurrent) return;
+  const st = ytPlayer.getPlayerState();
+  if (st !== YT.PlayerState.PLAYING && st !== YT.PlayerState.PAUSED) return;
+  const d = ytPlayer.getVideoData() || {}; if (!d.video_id || d.video_id !== ytCurrent.id) return;
+  markHist(ytCurrent, ytPlayer.getCurrentTime() || 0, ytPlayer.getDuration() || 0);
+}
+function ytLeave() { ytSave(); clearInterval(ytTimer); try { ytPlayer && ytPlayer.pauseVideo(); } catch {} renderResume(); }
+$('#yt-fs').addEventListener('click', () => {
+  const box = $('.yt-player-box'); const iframe = box.querySelector('iframe');
+  try { (iframe && iframe.requestFullscreen ? iframe : box).requestFullscreen().catch(() => toggleMax()); } catch { toggleMax(); }
+});
+function renderResume() {
+  const r = state.hist.find(x => x.d && x.t > 20 && x.d - x.t > 20);
+  const tile = $('#resume-tile'); tile.hidden = !r;
+  if (!r) return;
+  $('#resume-thumb').src = r.thumb; $('#resume-title').textContent = r.title;
+  $('#resume-sub').textContent = `${mmss(r.t)} / ${mmss(r.d)} · ${mmss(r.d - r.t)} left${r.channel ? ' · ' + r.channel : ''}`;
+  tile.onclick = () => show('youtube', true, { video: r, list: [r], t: r.t });
+}
+
+/* ======================================================================
+   SPORTS (ESPN public scoreboard)
+   ====================================================================== */
+const LG = { nfl: 'football/nfl', nba: 'basketball/nba', mlb: 'baseball/mlb', nhl: 'hockey/nhl', ncaaf: 'football/college-football', ncaam: 'basketball/mens-college-basketball', mls: 'soccer/usa.1' };
+const spCache = {}; let spTimer = null;
+async function loadScores(lg) {
+  const c = spCache[lg];
+  if (c && Date.now() - c.at < 60e3) return c.games;
+  const d = await getJSON(`https://site.api.espn.com/apis/site/v2/sports/${LG[lg]}/scoreboard`);
+  const games = (d.events || []).map(ev => gameFromEvent(ev, lg));
+  spCache[lg] = { at: Date.now(), games };
+  return games;
+}
+function gameFromEvent(ev, lg) {
+  const comp = (ev.competitions || [])[0] || {}, st = ev.status || comp.status || {}, t = st.type || {};
+  const teams = (comp.competitors || []).map(c => ({ id: c.team.id, abbr: c.team.abbreviation, name: c.team.shortDisplayName || c.team.displayName, logo: c.team.logo, score: c.score, home: c.homeAway === 'home', winner: !!c.winner, rank: c.curatedRank && c.curatedRank.current <= 25 ? c.curatedRank.current : 0, record: (c.records || []).length ? c.records[0].summary : '' }))
+    .sort((a, b) => a.home - b.home);
+  return { id: ev.id, lg, state: t.state || 'pre', detail: t.shortDetail || t.detail || '', date: ev.date, teams,
+           tv: ((comp.broadcasts || [])[0] || {}).names?.join(', ') || '', note: (comp.notes || [])[0]?.headline || '' };
+}
+function gameCard(g, fav) {
+  const c = document.createElement('div'); c.className = 'card game' + (fav ? ' fav' : '');
+  const live = g.state === 'in';
+  const when = g.state === 'pre' ? new Date(g.date).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : g.detail;
+  c.innerHTML = `<div class="gstat"><span>${esc(g.lg)}${g.note ? ' · ' + esc(g.note) : ''}</span><span class="${live ? 'live' : ''}">${esc(live ? g.detail : when)}</span></div>` +
+    g.teams.map(t => `<div class="team ${g.state === 'post' ? (t.winner ? 'win' : 'lose') : ''}"><img src="${esc(t.logo || '')}" alt="" onerror="this.style.visibility='hidden'"><span class="tn">${t.rank ? '#' + t.rank + ' ' : ''}${esc(t.name)}<small>${esc(t.record)}</small></span><span class="sc">${g.state === 'pre' ? '' : esc(t.score ?? '')}</span></div>`).join('') +
+    `<div class="gfoot">${esc(g.tv ? 'TV: ' + g.tv : '')}</div>`;
+  return c;
+}
+async function renderSports() {
+  pills($('#sp-pills'), 'lg', ui.spTab);
+  const grid = $('#sp-games'), hint = $('#sp-hint');
+  clearInterval(spTimer); spTimer = setInterval(() => { if (ui.open.sp && !document.hidden && current === 'home') renderSports(); }, 60e3);
+  try {
+    if (ui.spTab === 'favs') {
+      if (!prefs.teams.length) { hint.textContent = 'No teams picked yet. Tap "Pick teams".'; grid.innerHTML = ''; return; }
+      hint.textContent = 'Loading…';
+      const lgs = [...new Set(prefs.teams.map(t => t.lg))];
+      const scores = {}; await Promise.all(lgs.map(async lg => { try { scores[lg] = await loadScores(lg); } catch { scores[lg] = []; } }));
+      grid.innerHTML = ''; let shown = 0;
+      for (const t of prefs.teams) {
+        let g = (scores[t.lg] || []).find(g => g.teams.some(x => x.id === t.id));
+        if (!g) g = await nextGame(t);
+        if (g && !$$('.card', grid).some(el => el.dataset.gid === g.id)) { const c = gameCard(g, true); c.dataset.gid = g.id; grid.appendChild(c); shown++; }
+      }
+      hint.textContent = shown ? 'Your teams: today’s game, or the next one scheduled' : 'No games found for your teams.';
+    } else {
+      hint.textContent = 'Loading…';
+      const games = await loadScores(ui.spTab);
+      const favIds = new Set(prefs.teams.filter(t => t.lg === ui.spTab).map(t => t.id));
+      const isFavG = g => g.teams.some(t => favIds.has(t.id));
+      const order = g => (isFavG(g) ? 0 : 1) * 10 + (g.state === 'in' ? 0 : g.state === 'pre' ? 1 : 2);
+      games.sort((a, b) => order(a) - order(b) || new Date(a.date) - new Date(b.date));
+      grid.innerHTML = ''; games.forEach(g => grid.appendChild(gameCard(g, isFavG(g))));
+      hint.textContent = games.length ? `${games.length} games · updates every minute while open` : 'No games on the schedule right now.';
+    }
+  } catch (e) { hint.textContent = 'Could not load scores: ' + e.message; }
+}
+async function nextGame(t) {
+  const k = `sp_next_${t.lg}_${t.id}`, c = store.get(k, null);
+  if (c && Date.now() - c.at < 6 * 3600e3) return c.g;
+  try {
+    const d = await getJSON(`https://site.api.espn.com/apis/site/v2/sports/${LG[t.lg]}/teams/${t.id}`);
+    const ev = (d.team && d.team.nextEvent || [])[0];
+    const g = ev ? gameFromEvent(ev, t.lg) : null;
+    if (g) g.teams.forEach(x => { if (!x.logo) x.logo = `https://a.espncdn.com/i/teamlogos/${t.lg === 'ncaaf' || t.lg === 'ncaam' ? 'ncaa' : t.lg}/500/${x.id}.png`; });
+    store.set(k, { at: Date.now(), g }); return g;
+  } catch { return null; }
+}
+$('#sp-pills').addEventListener('click', e => { const p = e.target.closest('[data-lg]'); if (p) { ui.spTab = p.dataset.lg; saveUI(); renderSports(); } });
+// team picker
+let pickLg = 'nfl';
+$('#sp-edit-btn').addEventListener('click', async () => {
+  const b = $('#sp-edit'); b.hidden = !b.hidden; if (b.hidden) return;
+  if (!state.teams) { try { state.teams = (await getJSON('data/teams.json')).leagues; } catch { $('#sp-teams').innerHTML = '<p class="muted">Team list not available.</p>'; return; } }
+  $('#sp-edit-pills').innerHTML = Object.keys(LG).map(k => `<button class="pill" data-plg="${k}">${k.toUpperCase()}</button>`).join('');
+  renderPicker();
+});
+$('#sp-edit-pills').addEventListener('click', e => { const p = e.target.closest('[data-plg]'); if (p) { pickLg = p.dataset.plg; renderPicker(); } });
+function renderPicker() {
+  pills($('#sp-edit-pills'), 'plg', pickLg);
+  const grid = $('#sp-teams'); grid.innerHTML = '';
+  (state.teams[pickLg] || []).forEach(t => {
+    const on = prefs.teams.some(x => x.lg === pickLg && x.id === t.id);
+    const c = document.createElement('div'); c.className = 'card team-pick' + (on ? ' on' : ''); c.setAttribute('role', 'button');
+    c.innerHTML = `<img src="${esc(t.logo)}" alt="" loading="lazy"><span class="name">${esc(t.name)}</span>`;
+    c.addEventListener('click', () => {
+      if (prefs.teams.some(x => x.lg === pickLg && x.id === t.id)) prefs.teams = prefs.teams.filter(x => !(x.lg === pickLg && x.id === t.id));
+      else prefs.teams.push({ lg: pickLg, id: t.id, abbr: t.abbr, name: t.name, logo: t.logo });
+      savePrefs(); c.classList.toggle('on'); renderHome(); if (ui.spTab === 'favs') renderSports();
+    });
+    grid.appendChild(c);
+  });
+}
+
+/* ======================================================================
+   MARKETS (TradingView embeds) + ECONOMIC CALENDAR (data/calendar.json)
+   ====================================================================== */
+function tickers() { return prefs.tickers || state.sources.markets || []; }
 function tvWidget(container, script, cfg) {
   container.innerHTML = '<div class="tradingview-widget-container"><div class="tradingview-widget-container__widget"></div></div>';
   const s = document.createElement('script');
-  s.src = 'https://s3.tradingview.com/external-embedding/' + script;
-  s.async = true;
-  s.textContent = JSON.stringify(cfg);
+  s.src = 'https://s3.tradingview.com/external-embedding/' + script; s.async = true; s.textContent = JSON.stringify(cfg);
   container.firstChild.appendChild(s);
 }
-let marketsMounted = false, eventsMounted = false;
+let mountedKey = '';
 function mountMarkets() {
-  if (marketsMounted) return; marketsMounted = true;
-  const ms = state.sources.markets || [];
+  const ms = tickers(), key = JSON.stringify(ms);
+  if (key === mountedKey) return; mountedKey = key;
   const grid = $('#mk-cards'); grid.innerHTML = '';
   ms.forEach(m => {
     const card = document.createElement('div'); card.className = 'mk-card';
@@ -177,191 +642,66 @@ function mountMarkets() {
     tvWidget($('.mk-body', card), 'embed-widget-mini-symbol-overview.js',
       { symbol: m.symbol, width: '100%', height: 190, locale: 'en', dateRange: '1D', colorTheme: 'dark', isTransparent: true, autosize: false, largeChartUrl: '' });
   });
-  tvWidget($('#mk-chart'), 'embed-widget-symbol-overview.js', {
+  if (ms.length) tvWidget($('#mk-chart'), 'embed-widget-symbol-overview.js', {
     symbols: ms.map(m => [m.name, m.symbol + '|1D']),
     chartOnly: false, width: '100%', height: 480, locale: 'en', colorTheme: 'dark', autosize: false,
     showVolume: false, hideDateRanges: false, scalePosition: 'right', scaleMode: 'Normal', fontSize: '12',
     noTimeScale: false, valuesTracking: '1', changeMode: 'price-and-percent', chartType: 'area', isTransparent: true,
     dateRanges: ['1d|1', '1w|30', '1m|30', '3m|60', '12m|1D'],
+  }); else $('#mk-chart').innerHTML = '';
+  renderHome();
+}
+$('#mk-edit-btn').addEventListener('click', () => { const b = $('#mk-edit'); b.hidden = !b.hidden; if (!b.hidden) renderTickerChips(); });
+function renderTickerChips() {
+  const box = $('#mk-chips'); box.innerHTML = '';
+  tickers().forEach((m, i) => {
+    const c = document.createElement('span'); c.className = 'chip';
+    c.innerHTML = `${esc(m.name)} <small class="muted">${esc(m.symbol)}</small><button class="x" title="Remove">&times;</button>`;
+    $('.x', c).addEventListener('click', () => { prefs.tickers = tickers().filter((_, j) => j !== i); savePrefs(); renderTickerChips(); mountMarkets(); });
+    box.appendChild(c);
   });
 }
-function mountEvents() {
-  if (eventsMounted) return; eventsMounted = true;
-  tvWidget($('#mk-events'), 'embed-widget-events.js',
-    { colorTheme: 'dark', isTransparent: true, width: '100%', height: 560, locale: 'en', importanceFilter: '0,1', countryFilter: 'us' });
-}
-
-/* ---------- HOME ---------- */
-function renderHome() {
-  // Live TV: my channels, then favorites picked from the public list
-  const mine = state.sources.tv;
-  const extra = state.favs.filter(f => !mine.some(c => c.url === f.url));
-  const list = mine.concat(extra);
-  renderCards($('#tv-cards'), list, ch => extra.includes(ch) ? { tag: 'fav', star: true } : { tag: ch.group || '' });
-  $('#tv-meta').textContent = `${list.length} channels`;
-
-  // Markets meta
-  $('#mk-meta').textContent = (state.sources.markets || []).map(m => m.name.split(' ')[0]).join(' · ');
-
-  // YouTube
-  renderResume();
-  renderYTHome();
-}
-function renderResume() {
-  const r = state.resume, tile = $('#resume-tile');
-  tile.hidden = !(r && r.id && state.cfg.ytList);
-  if (tile.hidden) return;
-  $('#resume-thumb').src = `https://i.ytimg.com/vi/${r.id}/mqdefault.jpg`;
-  $('#resume-title').textContent = r.title || ytTitles[r.id] || 'YouTube video';
-  $('#resume-sub').textContent = r.d ? `${mmss(r.t)} / ${mmss(r.d)} · ${mmss(r.d - r.t)} left` : `at ${mmss(r.t)}`;
-}
-$('#resume-tile').addEventListener('click', () => show('youtube', true, { resume: state.resume }));
-
-/* ---------- LIVE TV: public US list ---------- */
-async function renderTV() {
-  const note = $('#tv-note'); note.hidden = true;
-  const q = $('#tv-search').value;
-  if (!state.publicUS) {
-    $('#tv-grid').innerHTML = '<p class="muted">Loading the public US list…</p>';
-    try {
-      const r = await fetch(PUBLIC_US, { cache: 'no-store' });
-      state.publicUS = parseM3U(await r.text()).filter(ch => !/geo-blocked|not 24\/7/i.test(ch.name));
-    } catch (e) {
-      $('#tv-grid').innerHTML = ''; note.textContent = 'Could not load the public list: ' + e.message; note.hidden = false; return;
-    }
-  }
-  const extra = renderCards($('#tv-grid'), filterList(state.publicUS, q), ch => ({ tag: ch.group || '', star: true }));
-  if (extra) { note.textContent = extra; note.hidden = false; }
-}
-$('#tv-search').addEventListener('input', renderTV);
-
-/* ---------- YOUTUBE (IFrame API, plays inside the app, remembers position) ---------- */
-let ytPlayer = null, ytApi = null, ytIds = store.get('yt_ids', []), ytTimer = null, ytPendingSeek = 0, ytPendingIndex = -1,
-    ytTitles = store.get('yt_titles', {}), ytLoading = null;
-function ytListId(v) { const m = String(v || '').match(/[?&]list=([A-Za-z0-9_-]+)/); return m ? m[1] : String(v || '').trim(); }
-function loadYTApi() {
-  if (ytApi) return ytApi;
-  ytApi = new Promise(res => {
-    if (window.YT && YT.Player) return res();
-    window.onYouTubeIframeAPIReady = () => res();
-    const s = document.createElement('script'); s.src = 'https://www.youtube.com/iframe_api'; document.head.appendChild(s);
-  });
-  return ytApi;
-}
-// Creates the (hidden) player once and cues the playlist, so the home page can list the videos.
-function ensureYT() {
-  const list = ytListId(state.cfg.ytList);
-  if (!list) return Promise.resolve();
-  if (ytLoading && ytPlayer && ytPlayer.__list === list) return ytLoading;
-  ytLoading = (async () => {
-    await loadYTApi();
-    if (!ytPlayer) {
-      await new Promise(res => {
-        ytPlayer = new YT.Player('yt-player', {
-          width: '100%', height: '100%',
-          playerVars: { listType: 'playlist', list, rel: 0, playsinline: 1, modestbranding: 1, enablejsapi: 1, origin: location.origin },
-          events: { onReady: () => res(), onStateChange: ytState, onError: () => {} },
-        });
-      });
-    } else if (ytPlayer.__list !== list) {
-      ytPlayer.cuePlaylist({ list, listType: 'playlist' });
-    }
-    ytPlayer.__list = list;
-    let ids = [];
-    for (let i = 0; i < 24 && !(ids = ytPlayer.getPlaylist() || []).length; i++) await new Promise(r => setTimeout(r, 250));
-    if (ids.length) { ytIds = ids; store.set('yt_ids', ids); }
-    renderYTHome(); renderYTList();
-    fetchTitles(ytIds);
-  })();
-  return ytLoading;
-}
-function renderYTHome() {
-  const list = ytListId(state.cfg.ytList);
-  $('#yt-setup').hidden = !!list;
-  const grid = $('#yt-cards'); grid.innerHTML = '';
-  const links = $('#yt-links'); links.innerHTML = '';
-  (state.sources.links || []).forEach(l => {
-    const a = document.createElement('a'); a.className = 'btn ghost'; a.href = l.url; a.textContent = l.name + ' ↗'; links.appendChild(a);
-  });
-  if (!list) { $('#yt-meta').textContent = 'not set up'; return; }
-  $('#yt-meta').textContent = ytIds.length ? `${ytIds.length} videos` : 'loading…';
-  const r = state.resume || {};
-  ytIds.forEach((id, i) => {
-    const c = document.createElement('div');
-    c.className = 'card video' + (id === r.id ? ' now' : '');
-    c.setAttribute('role', 'button');
-    const pct = id === r.id && r.d ? Math.round(100 * r.t / r.d) : 0;
-    c.innerHTML = `<img src="https://i.ytimg.com/vi/${id}/mqdefault.jpg" alt="" loading="lazy">` +
-      (pct ? `<span class="bar-progress"><i style="width:${pct}%"></i></span>` : '') +
-      `<span class="name">${esc(ytTitles[id] || 'Video ' + (i + 1))}</span>`;
-    c.addEventListener('click', () => show('youtube', true, id === r.id ? { resume: r } : { index: i }));
-    grid.appendChild(c);
-  });
-}
-async function openYouTube(opts = {}) {
-  await ensureYT();
-  if (!ytPlayer) { show('settings'); return; }
-  if (opts.resume && opts.resume.id) {
-    const idx = ytIds.indexOf(opts.resume.id);
-    ytPendingSeek = opts.resume.t || 0;
-    if (idx >= 0) ytPlayer.playVideoAt(idx); else ytPlayer.loadVideoById({ videoId: opts.resume.id, startSeconds: opts.resume.t || 0 });
-  } else if (opts.index != null) {
-    ytPendingSeek = 0; ytPlayer.playVideoAt(opts.index);
-  }
-  renderYTList();
-  clearInterval(ytTimer); ytTimer = setInterval(ytSave, 5000);
-}
-function renderYTList() {
-  const box = $('#yt-list'); box.innerHTML = '';
-  const cur = ytPlayer && ytPlayer.getVideoData ? (ytPlayer.getVideoData() || {}).video_id : '';
-  ytIds.forEach((id, i) => {
-    const b = document.createElement('button');
-    b.className = 'yt-item' + (id === cur ? ' active' : '');
-    b.innerHTML = `<img src="https://i.ytimg.com/vi/${id}/mqdefault.jpg" alt="" loading="lazy"><span>${esc(ytTitles[id] || 'Video ' + (i + 1))}</span>`;
-    b.addEventListener('click', () => { ytPendingSeek = 0; ytPlayer.playVideoAt(i); });
-    box.appendChild(b);
-  });
-  if (!ytIds.length) box.innerHTML = '<p class="muted">No videos found. Is the playlist public or unlisted, and does the link contain list=?</p>';
-}
-async function fetchTitles(ids) {
-  const missing = ids.filter(id => !ytTitles[id]).slice(0, 60);
-  await Promise.all(missing.map(async id => {
-    try {
-      const r = await fetch(`https://www.youtube.com/oembed?url=${encodeURIComponent('https://www.youtube.com/watch?v=' + id)}&format=json`);
-      if (r.ok) ytTitles[id] = (await r.json()).title;
-    } catch {}
-  }));
-  if (missing.length) { store.set('yt_titles', ytTitles); renderYTHome(); renderYTList(); renderResume(); }
-}
-function ytState(e) {
-  const s = e.data;
-  if (s === YT.PlayerState.PLAYING) {
-    if (ytPendingSeek > 3) { ytPlayer.seekTo(ytPendingSeek, true); ytPendingSeek = 0; }
-    const d = ytPlayer.getVideoData() || {};
-    if (d.title && d.video_id) { ytTitles[d.video_id] = d.title; store.set('yt_titles', ytTitles); }
-    $('#yt-title').textContent = d.title || 'YouTube';
-    renderYTList();
-  }
-  if (s === YT.PlayerState.PAUSED) ytSave();
-  if (s === YT.PlayerState.ENDED) { state.resume = null; store.del('yt_resume'); }
-}
-function ytSave() {
-  if (!ytPlayer || !ytPlayer.getPlayerState) return;
-  const st = ytPlayer.getPlayerState();
-  if (st !== YT.PlayerState.PLAYING && st !== YT.PlayerState.PAUSED) return;
-  const d = ytPlayer.getVideoData() || {}; if (!d.video_id) return;
-  const t = ytPlayer.getCurrentTime() || 0, dur = ytPlayer.getDuration() || 0;
-  if (dur && dur - t < 20) { state.resume = null; store.del('yt_resume'); return; }
-  state.resume = { id: d.video_id, title: d.title || ytTitles[d.video_id] || '', t, d: dur, when: Date.now() };
-  store.set('yt_resume', state.resume);
-}
-function ytLeave() { ytSave(); clearInterval(ytTimer); try { ytPlayer && ytPlayer.pauseVideo(); } catch {} }
-$('#yt-fs').addEventListener('click', () => {
-  const box = $('.yt-player-box'); const iframe = box.querySelector('iframe');
-  try { (iframe && iframe.requestFullscreen ? iframe : box).requestFullscreen().catch(() => toggleMax()); } catch { toggleMax(); }
+$('#mk-add').addEventListener('click', () => {
+  let sym = $('#mk-sym').value.trim().toUpperCase().replace(/\s+/g, ''); if (!sym) return;
+  const name = $('#mk-name').value.trim() || sym.split(':').pop();
+  prefs.tickers = tickers().concat([{ name, symbol: sym }]); savePrefs();
+  $('#mk-sym').value = ''; $('#mk-name').value = ''; renderTickerChips(); mountMarkets();
 });
+$('#mk-sym').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); $('#mk-add').click(); } });
+$('#mk-reset').addEventListener('click', () => { prefs.tickers = null; savePrefs(); renderTickerChips(); mountMarkets(); });
 
-/* ---------- LIVE PLAYER ---------- */
+async function renderCalendar() {
+  const box = $('#cal-body');
+  try {
+    if (!state.calendar) state.calendar = await getJSON('data/calendar.json', { cache: 'no-store' });
+    const evs = state.calendar.events || [];
+    const now = new Date(), todayKey = now.toDateString();
+    const days = new Map();
+    evs.forEach(e => { const d = new Date(e.d); const k = d.toDateString(); if (!days.has(k)) days.set(k, { d, rows: [] }); days.get(k).rows.push({ ...e, dt: d }); });
+    let html = '';
+    [...days.values()].sort((a, b) => a.d - b.d).forEach(day => {
+      const isToday = day.d.toDateString() === todayKey;
+      if (!isToday && day.d < now && now - day.d > 3 * 86400e3) return; // keep the last couple of days, today, and the rest of the week
+      html += `<div class="cal-day ${isToday ? 'today' : ''}">${day.d.toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' })}</div><table class="cal-table">`;
+      day.rows.forEach(r => {
+        const imp = r.i === 'High' ? 'hi' : r.i === 'Medium' ? 'med' : r.i === 'Holiday' ? 'hol' : 'low';
+        const past = r.dt < now;
+        const time = r.i === 'Holiday' ? 'All day' : r.dt.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+        html += `<tr class="${imp} ${past && !r.a ? 'past' : ''}"><td class="t">${esc(time)}</td><td class="n"><i class="imp ${imp}"></i>&nbsp; ${esc(r.t)}</td>` +
+          `<td class="v">${r.a ? '<b>' + esc(r.a) + '</b>' : '<span class="muted">—</span>'}</td><td class="v">${esc(r.f || '')}</td><td class="v">${esc(r.p || '')}</td></tr>`;
+      });
+      html += '</table>';
+    });
+    const upd = state.calendar.updated ? new Date(state.calendar.updated * 1000) : null;
+    box.innerHTML = (html || '<p class="muted">No US events this week.</p>') +
+      `<p class="muted small">Columns: actual · forecast · previous. Times are local.${upd ? ' Updated ' + ago(upd) + '.' : ''}</p>`;
+    $('#cal-meta').textContent = 'US · ' + evs.filter(e => new Date(e.d).toDateString() === todayKey).length + ' today';
+  } catch (e) { box.innerHTML = `<p class="muted">Calendar not available yet (${esc(e.message)}). It fills in once the data job has run.</p>`; }
+}
+
+/* ======================================================================
+   LIVE PLAYER (hls.js)
+   ====================================================================== */
 const video = $('#video');
 let overlayTimer = null;
 function showOverlay() {
@@ -370,7 +710,6 @@ function showOverlay() {
   overlayTimer = setTimeout(() => { if (!video.paused) $('#overlay').classList.add('hide'); }, 4000);
 }
 function msg(html) { const m = $('#player-msg'); if (!html) { m.hidden = true; return; } m.innerHTML = html; m.hidden = false; showOverlay(); }
-
 function play(ch, queue) {
   state.queue = queue || [ch];
   state.qi = Math.max(0, state.queue.indexOf(ch));
@@ -382,56 +721,37 @@ function startStream(ch) {
   stopHls();
   $('#player-title').textContent = ch.name;
   $('#player-fav').innerHTML = isFav(ch) ? '&#9733;' : '&#9734;';
-  msg('');
-  showOverlay();
+  msg(''); showOverlay();
   if (mixedContent(ch.url)) {
-    msg(`<div>This channel uses plain http and the page is https, so the browser blocks it.</div>
-         <button class="btn" id="msg-next">Next channel</button>`);
-    $('#msg-next').onclick = () => step(1);
-    return;
+    msg(`<div>This channel uses plain http and the page is https, so the browser blocks it.</div><button class="btn" id="msg-next">Next channel</button>`);
+    $('#msg-next').onclick = () => step(1); return;
   }
   const isHls = /\.m3u8(\?|$)/i.test(ch.url) || /\/live\//i.test(ch.url);
   if (isHls && window.Hls && Hls.isSupported()) {
     const hls = new Hls({ enableWorker: true, lowLatencyMode: false, backBufferLength: 30 });
-    state.hls = hls;
-    hls.loadSource(ch.url);
-    hls.attachMedia(video);
+    state.hls = hls; hls.loadSource(ch.url); hls.attachMedia(video);
     let netRetries = 0, mediaRetries = 0, softErrors = 0;
     hls.on(Hls.Events.MANIFEST_PARSED, () => { video.play().catch(() => {}); });
     hls.on(Hls.Events.FRAG_LOADED, () => { softErrors = 0; });
     hls.on(Hls.Events.ERROR, (_, data) => {
-      if (!data.fatal) {
-        if (++softErrors >= 6) failed(ch, data.details + (data.response ? ' ' + data.response.code : ''));
-        return;
-      }
+      if (!data.fatal) { if (++softErrors >= 6) failed(ch, data.details + (data.response ? ' ' + data.response.code : '')); return; }
       if (data.type === Hls.ErrorTypes.NETWORK_ERROR && netRetries++ < 2) { setTimeout(() => hls.startLoad(), 800); return; }
       if (data.type === Hls.ErrorTypes.MEDIA_ERROR && mediaRetries++ < 2) { hls.recoverMediaError(); return; }
       failed(ch, data.details + (data.response ? ' ' + data.response.code : ''));
     });
-  } else {
-    video.src = ch.url;
-    video.play().catch(() => {});
-  }
+  } else { video.src = ch.url; video.play().catch(() => {}); }
 }
 function failed(ch, why) {
   stopHls();
-  msg(`<div>Stream failed: ${esc(ch.name)}</div>
-       <div class="muted small">${esc(why || '')}. Usually the source is down, geo-blocked, or blocks browsers.</div>
+  msg(`<div>Stream failed: ${esc(ch.name)}</div><div class="muted small">${esc(why || '')}. Usually the source is down, geo-blocked, or blocks browsers.</div>
        <button class="btn" id="msg-retry">Retry</button><button class="btn primary" id="msg-next">Next channel</button>`);
   $('#msg-retry').onclick = () => startStream(ch);
   $('#msg-next').onclick = () => step(1);
 }
 video.addEventListener('error', () => { if (!state.hls) failed(state.queue[state.qi], 'Browser could not play this format'); });
-function step(d) {
-  if (!state.queue.length) return;
-  state.qi = (state.qi + d + state.queue.length) % state.queue.length;
-  startStream(state.queue[state.qi]);
-}
+function step(d) { if (!state.queue.length) return; state.qi = (state.qi + d + state.queue.length) % state.queue.length; startStream(state.queue[state.qi]); }
 function stopHls() { if (state.hls) { try { state.hls.destroy(); } catch {} state.hls = null; } video.removeAttribute('src'); try { video.load(); } catch {} }
-function stopPlayer() {
-  stopHls();
-  if (document.fullscreenElement) { try { document.exitFullscreen().catch(() => {}); } catch {} }
-}
+function stopPlayer() { stopHls(); if (document.fullscreenElement) { try { document.exitFullscreen().catch(() => {}); } catch {} } }
 $('#player-back').addEventListener('click', () => history.back());
 $('#player-prev').addEventListener('click', () => step(-1));
 $('#player-next').addEventListener('click', () => step(1));
@@ -439,45 +759,47 @@ $('#player-fav').addEventListener('click', () => { const ch = state.queue[state.
 $('#view-player').addEventListener('click', e => { if (!e.target.closest('.btn')) showOverlay(); });
 video.addEventListener('pause', showOverlay);
 
-/* ---------- SETTINGS ---------- */
+/* ======================================================================
+   SETTINGS + car link (#p= carries every preference)
+   ====================================================================== */
 function status(text, ok) { const s = $('#s-status'); s.textContent = text; s.className = 'note' + (ok ? ' ok' : ''); s.hidden = !text; }
-function carLink() { const id = ytListId(state.cfg.ytList); return location.origin + location.pathname + (id ? '#yt=' + id : ''); }
+function carLink() {
+  const p = {}; Object.keys(PREF_DEFAULTS).forEach(k => { if (JSON.stringify(prefs[k]) !== JSON.stringify(PREF_DEFAULTS[k])) p[k] = prefs[k]; });
+  return location.origin + location.pathname + (Object.keys(p).length ? '#p=' + b64u.enc(JSON.stringify(p)) : '');
+}
 function renderSettings() {
-  $('#s-ytlist').value = state.cfg.ytList || '';
-  $('#s-carlink').value = carLink();
-  $('#s-version').textContent = `Garage TV ${VERSION}`;
-  status('');
+  $('#s-ytkey').value = prefs.ytKey || ''; $('#s-ytlist').value = prefs.ytList || '';
+  $('#s-carlink').value = carLink(); $('#s-version').textContent = `Garage TV ${VERSION}`; status('');
 }
 $('#s-save').addEventListener('click', () => {
-  const id = ytListId($('#s-ytlist').value);
-  state.cfg = { ...state.cfg, ytList: id };
-  store.set('cfg', state.cfg);
-  ytIds = []; store.del('yt_ids');
-  $('#s-carlink').value = carLink();
+  prefs.ytKey = $('#s-ytkey').value.trim(); prefs.ytList = ytListId($('#s-ytlist').value); savePrefs();
+  Object.keys(ytCache).forEach(k => delete ytCache[k]);
   history.replaceState(history.state, '', carLink());
-  status(id ? 'Saved. The playlist is on the home page.' : 'Saved (no playlist).', true);
-  state.open.yt = true; store.set('ui_open', state.open);
+  status('Saved. Bookmark the car link below so the car never needs this typed.', true);
+  ui.open.yt = true; saveUI();
 });
 $('#s-clear').addEventListener('click', () => {
-  if (!confirm('Clear the playlist link, favorites, resume point and section layout saved in this browser?')) return;
-  ['cfg', 'favs', 'yt_resume', 'yt_titles', 'yt_ids', 'ui_open'].forEach(store.del);
-  state.cfg = {}; state.favs = []; state.resume = null; state.open = {}; ytTitles = {}; ytIds = [];
-  history.replaceState(history.state, '', location.pathname);
-  renderSettings(); status('Cleared.', true);
+  if (!confirm('Clear every preference, favorite, history item and section layout saved in this browser?')) return;
+  ['prefs', 'ui', 'favs', 'yt_hist', 'yt_titles', 'loc_auto'].forEach(store.del);
+  Object.keys(localStorage).filter(k => k.startsWith('sp_next_')).forEach(store.del);
+  location.replace(location.pathname);
 });
 
 /* ---------- boot ---------- */
 async function boot() {
-  try { const r = await fetch('sources.json', { cache: 'no-store' }); state.sources = await r.json(); } catch {}
-  // Playlist can come from the car link (#yt=...), else from what was saved here, else from sources.json.
-  const fromHash = (location.hash.match(/[#&]yt=([A-Za-z0-9_-]+)/) || [])[1];
-  const fromSources = ytListId((state.sources.youtube || {}).playlist);
-  const id = fromHash || state.cfg.ytList || fromSources;
-  if (id && id !== state.cfg.ytList) { state.cfg = { ...state.cfg, ytList: id }; store.set('cfg', state.cfg); ytIds = []; }
+  try { state.sources = await getJSON('sources.json', { cache: 'no-store' }); } catch {}
+  // preferences from the car link win over what this browser saved; legacy #yt= still works
+  const p = (location.hash.match(/[#&]p=([A-Za-z0-9_-]+)/) || [])[1];
+  if (p) { try { Object.assign(prefs, JSON.parse(b64u.dec(p))); } catch {} }
+  const legacyYt = (location.hash.match(/[#&]yt=([A-Za-z0-9_-]+)/) || [])[1];
+  if (legacyYt) prefs.ytList = legacyYt;
+  const sy = state.sources.youtube || {};
+  if (!prefs.ytList && sy.playlist) prefs.ytList = ytListId(sy.playlist);
+  if (!prefs.ytKey && sy.apiKey) prefs.ytKey = sy.apiKey;
+  savePrefs();
   history.replaceState({ view: 'home' }, '', location.href);
   renderHome();
   applySections();
-  if (state.cfg.ytList && (state.resume || !ytIds.length)) ensureYT();
 }
 boot();
 })();

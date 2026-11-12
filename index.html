@@ -12,7 +12,7 @@
 </head>
 <body>
 
-<!-- HOME: one page, collapsible sections -->
+<!-- ============ HOME: one page, collapsible sections ============ -->
 <section id="view-home" class="view">
   <header class="bar">
     <div class="brand"><span class="brand-mark"></span>GARAGE<b>TV</b></div>
@@ -23,7 +23,7 @@
     </div>
   </header>
 
-  <!-- Continue watching (only when there is something to resume) -->
+  <!-- Continue watching (YouTube) -->
   <button class="resume" id="resume-tile" hidden>
     <img id="resume-thumb" alt="">
     <span class="resume-text">
@@ -37,15 +37,33 @@
   <!-- LIVE TV -->
   <div class="sec" data-sec="tv">
     <button class="sec-head">
-      <span class="sec-dot live"></span>
-      <span class="sec-name">Live TV</span>
-      <span class="sec-meta" id="tv-meta"></span>
-      <span class="chev"></span>
+      <span class="sec-dot live"></span><span class="sec-name">Live TV</span>
+      <span class="sec-meta" id="tv-meta"></span><span class="chev"></span>
     </button>
     <div class="sec-body"><div class="sec-inner">
-      <div class="cards" id="tv-cards"></div>
-      <div class="sec-foot">
-        <button class="btn ghost" data-go="tv">Browse all public US channels &#8594;</button>
+      <div class="toolbar">
+        <div class="pills" id="tv-pills">
+          <button class="pill" data-tvtab="local">Local news</button>
+          <button class="pill" data-tvtab="mine">Channels</button>
+          <button class="pill" data-go="tv">All public US &#8599;</button>
+        </div>
+        <button class="btn ghost small-btn" id="tv-edit-btn">Change location</button>
+      </div>
+      <div class="editor" id="tv-edit" hidden>
+        <div class="row">
+          <label class="field"><span>State</span><select id="loc-state"></select></label>
+          <label class="field"><span>City (optional)</span><select id="loc-city"></select></label>
+          <button class="btn ghost" id="loc-detect">Detect my location</button>
+          <button class="btn primary" id="loc-save">Use this</button>
+        </div>
+        <p class="muted small" id="loc-note"></p>
+      </div>
+      <div id="tv-local">
+        <p class="hint" id="local-hint"></p>
+        <div class="cards" id="local-cards"></div>
+      </div>
+      <div id="tv-mine" hidden>
+        <div class="cards" id="tv-cards"></div>
       </div>
     </div></div>
   </div>
@@ -53,51 +71,122 @@
   <!-- YOUTUBE -->
   <div class="sec" data-sec="yt">
     <button class="sec-head">
-      <span class="sec-dot yt"></span>
-      <span class="sec-name">YouTube</span>
-      <span class="sec-meta" id="yt-meta"></span>
-      <span class="chev"></span>
+      <span class="sec-dot yt"></span><span class="sec-name">YouTube</span>
+      <span class="sec-meta" id="yt-meta"></span><span class="chev"></span>
     </button>
     <div class="sec-body"><div class="sec-inner">
-      <div id="yt-setup" class="setup" hidden>
-        <p>Plays inside Garage TV and remembers where you stopped.</p>
-        <p class="muted">On your phone, make a YouTube playlist (public or unlisted) and save videos to it. Then paste its link once in Settings.</p>
+      <div class="toolbar">
+        <form class="searchbox" id="yt-form">
+          <input type="search" id="yt-q" class="search wide" placeholder="Search YouTube" autocomplete="off">
+          <button class="btn primary" type="submit">Search</button>
+        </form>
+        <button class="btn ghost small-btn" id="yt-edit-btn">My channels</button>
+      </div>
+      <div class="pills" id="yt-pills">
+        <button class="pill" data-yttab="trending">Trending</button>
+        <button class="pill" data-yttab="cat:25">News</button>
+        <button class="pill" data-yttab="cat:17">Sports</button>
+        <button class="pill" data-yttab="cat:10">Music</button>
+        <button class="pill" data-yttab="cat:28">Tech</button>
+        <button class="pill" data-yttab="cat:2">Autos</button>
+        <button class="pill" data-yttab="cat:20">Gaming</button>
+        <button class="pill" data-yttab="cat:24">Entertainment</button>
+        <button class="pill" data-yttab="follows">My channels</button>
+        <button class="pill" data-yttab="playlist">My playlist</button>
+        <button class="pill" data-yttab="history">History</button>
+      </div>
+      <div class="editor" id="yt-edit" hidden>
+        <p class="muted small">Channels you follow show up under "My channels", newest videos first.</p>
+        <div class="row">
+          <input type="search" id="yt-chq" class="search" placeholder="Find a channel by name">
+          <button class="btn ghost" id="yt-chfind">Find</button>
+        </div>
+        <div class="chips" id="yt-chresults"></div>
+        <div class="chips" id="yt-follows"></div>
+      </div>
+      <div class="setup" id="yt-setup" hidden>
+        <p><b>One-time setup:</b> search, trending and channels need a free YouTube API key.</p>
+        <ol class="muted">
+          <li>On a PC, open <code>console.cloud.google.com</code>, make a project, enable "YouTube Data API v3".</li>
+          <li>Credentials &#8594; Create credentials &#8594; API key. Restrict it to website <code>barant123.github.io</code>.</li>
+          <li>Paste the key in Settings here. Then bookmark the car link so the car never needs it typed.</li>
+        </ol>
         <button class="btn primary" data-go="settings">Open Settings</button>
       </div>
+      <p class="hint" id="yt-hint"></p>
       <div class="cards videos" id="yt-cards"></div>
-      <div class="sec-foot" id="yt-links"></div>
+    </div></div>
+  </div>
+
+  <!-- SPORTS -->
+  <div class="sec" data-sec="sp">
+    <button class="sec-head">
+      <span class="sec-dot sp"></span><span class="sec-name">Sports</span>
+      <span class="sec-meta" id="sp-meta"></span><span class="chev"></span>
+    </button>
+    <div class="sec-body"><div class="sec-inner">
+      <div class="toolbar">
+        <div class="pills" id="sp-pills">
+          <button class="pill" data-lg="favs">&#9733; My teams</button>
+          <button class="pill" data-lg="nfl">NFL</button>
+          <button class="pill" data-lg="nba">NBA</button>
+          <button class="pill" data-lg="mlb">MLB</button>
+          <button class="pill" data-lg="nhl">NHL</button>
+          <button class="pill" data-lg="ncaaf">NCAAF</button>
+          <button class="pill" data-lg="ncaam">NCAAM</button>
+          <button class="pill" data-lg="mls">MLS</button>
+        </div>
+        <button class="btn ghost small-btn" id="sp-edit-btn">Pick teams</button>
+      </div>
+      <div class="editor" id="sp-edit" hidden>
+        <div class="pills" id="sp-edit-pills"></div>
+        <div class="cards teams" id="sp-teams"></div>
+      </div>
+      <p class="hint" id="sp-hint"></p>
+      <div class="cards games" id="sp-games"></div>
     </div></div>
   </div>
 
   <!-- MARKETS -->
   <div class="sec" data-sec="mk">
     <button class="sec-head">
-      <span class="sec-dot mk"></span>
-      <span class="sec-name">Markets</span>
-      <span class="sec-meta" id="mk-meta"></span>
-      <span class="chev"></span>
+      <span class="sec-dot mk"></span><span class="sec-name">Markets</span>
+      <span class="sec-meta" id="mk-meta"></span><span class="chev"></span>
     </button>
     <div class="sec-body"><div class="sec-inner">
+      <div class="toolbar">
+        <span class="muted small" id="mk-note">Live cards and chart. NQ and ES are 24h CFD stand-ins for the futures.</span>
+        <button class="btn ghost small-btn" id="mk-edit-btn">Edit tickers</button>
+      </div>
+      <div class="editor" id="mk-edit" hidden>
+        <div class="chips" id="mk-chips"></div>
+        <div class="row">
+          <input type="text" id="mk-sym" class="search" placeholder="Symbol, e.g. AAPL or NASDAQ:TSLA" autocomplete="off">
+          <input type="text" id="mk-name" class="search" placeholder="Label (optional)" autocomplete="off">
+          <button class="btn primary" id="mk-add">Add</button>
+          <button class="btn ghost" id="mk-reset">Reset to default</button>
+        </div>
+      </div>
       <div class="cards markets" id="mk-cards"></div>
       <div id="mk-chart" class="widget-box"></div>
-    </div></div>
-  </div>
 
-  <!-- ECONOMIC CALENDAR -->
-  <div class="sec" data-sec="cal">
-    <button class="sec-head">
-      <span class="sec-dot cal"></span>
-      <span class="sec-name">Economic calendar</span>
-      <span class="sec-meta">US · today and this week</span>
-      <span class="chev"></span>
-    </button>
-    <div class="sec-body"><div class="sec-inner">
-      <div id="mk-events" class="widget-box"></div>
+      <div class="sub" data-sub="cal">
+        <button class="sub-head">
+          <span class="sec-dot cal"></span><span class="sec-name">Economic calendar</span>
+          <span class="sec-meta" id="cal-meta">US</span><span class="chev"></span>
+        </button>
+        <div class="sub-body"><div class="sec-inner">
+          <div class="legend">
+            <span><i class="imp hi"></i>High impact</span><span><i class="imp med"></i>Medium</span><span><i class="imp low"></i>Low</span>
+          </div>
+          <div id="cal-body"></div>
+        </div></div>
+      </div>
     </div></div>
   </div>
 </section>
 
-<!-- PUBLIC US CHANNEL LIST -->
+<!-- ============ PUBLIC US CHANNEL LIST ============ -->
 <section id="view-tv" class="view" hidden>
   <header class="bar">
     <button class="btn back" data-go="home">&#8592;</button>
@@ -111,7 +200,7 @@
   <p class="note" id="tv-note" hidden></p>
 </section>
 
-<!-- YOUTUBE PLAYER (inside the app) -->
+<!-- ============ YOUTUBE PLAYER (inside the app) ============ -->
 <section id="view-youtube" class="view" hidden>
   <header class="bar">
     <button class="btn back" data-go="home">&#8592;</button>
@@ -127,7 +216,7 @@
   </div>
 </section>
 
-<!-- LIVE PLAYER -->
+<!-- ============ LIVE PLAYER ============ -->
 <section id="view-player" class="view player" hidden>
   <video id="video" playsinline controls></video>
   <div class="overlay" id="overlay">
@@ -145,7 +234,7 @@
   </div>
 </section>
 
-<!-- SETTINGS -->
+<!-- ============ SETTINGS ============ -->
 <section id="view-settings" class="view" hidden>
   <header class="bar">
     <button class="btn back" data-go="home">&#8592;</button>
@@ -154,28 +243,20 @@
   </header>
 
   <div class="form">
-    <h2>YouTube playlist</h2>
-    <p class="muted">A YouTube playlist you control (public or unlisted). Whatever you save to it on your phone shows up on the home page, plays inside Garage TV, and remembers where you stopped.</p>
-    <label class="field">
-      <span>Playlist link or ID</span>
-      <input type="text" id="s-ytlist" placeholder="https://www.youtube.com/playlist?list=PL...">
-    </label>
-    <div class="row">
-      <button class="btn primary" id="s-save">Save</button>
-    </div>
+    <h2>YouTube</h2>
+    <p class="muted">A free YouTube Data API key turns on search, trending, categories and followed channels. Make one at console.cloud.google.com (enable "YouTube Data API v3", then Credentials &#8594; API key, restricted to the website barant123.github.io).</p>
+    <label class="field"><span>API key</span><input type="text" id="s-ytkey" placeholder="AIza..." autocomplete="off"></label>
+    <label class="field"><span>My playlist (optional, a playlist link you control)</span><input type="text" id="s-ytlist" placeholder="https://www.youtube.com/playlist?list=PL..."></label>
+
+    <div class="row"><button class="btn primary" id="s-save">Save</button></div>
     <p class="note" id="s-status" hidden></p>
 
     <h2>Car link (no typing in the car)</h2>
-    <p class="muted">Bookmark this link in the car. It carries the playlist, so even if the car browser forgets its settings after an update, opening the bookmark puts it back.</p>
-    <label class="field">
-      <span>Bookmark this</span>
-      <input type="text" id="s-carlink" readonly>
-    </label>
+    <p class="muted">This link carries every preference on this page: key, playlist, tickers, teams, followed channels and location. Bookmark it in the car. If the car browser forgets its settings after an update, opening the bookmark restores everything.</p>
+    <label class="field"><span>Bookmark this</span><input type="text" id="s-carlink" readonly></label>
 
     <h2>This device</h2>
-    <div class="row">
-      <button class="btn danger" id="s-clear">Clear everything saved here</button>
-    </div>
+    <div class="row"><button class="btn danger" id="s-clear">Clear everything saved here</button></div>
     <p class="muted small" id="s-version"></p>
   </div>
 </section>
