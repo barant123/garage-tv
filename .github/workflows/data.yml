@@ -1,0 +1,31 @@
+name: Refresh data
+
+# Rebuilds data/calendar.json, data/locals.json and data/teams.json and commits them.
+# The economic calendar feed has no browser CORS header, so the page cannot fetch it
+# directly; this job fetches it here instead. Runs every 4 hours and on demand.
+
+on:
+  schedule:
+    - cron: "17 */4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python tools/build_data.py
+      - name: Commit if changed
+        run: |
+          git config user.name "garage-tv-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add data
+          git diff --cached --quiet && echo "no change" && exit 0
+          git commit -m "data: refresh calendar, locals, teams"
+          git push
