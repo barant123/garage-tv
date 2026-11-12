@@ -31,6 +31,37 @@ and show a warning badge. "All public US" in Live TV loads the free index at
 iptv-org.github.io live, so you can search there for a channel first and copy
 its link into `sources.json` if you want it on your own list.
 
+## Markets today
+
+The home page shows four live cards (price, day change, intraday line) and
+"Full view" opens a chart with range buttons, an overview per symbol, and the
+US economic calendar. They are free TradingView embeds, no key needed.
+
+CME futures (NQ1!, ES1!) are licensed data and the free widgets refuse them,
+so the NQ and ES cards use the 24-hour CFD feeds `OANDA:NAS100USD` and
+`OANDA:SPX500USD`. They move with the futures but the price level differs by
+the basis. Symbols live in `sources.json` under `markets`.
+
+## YouTube car playlist (remembers where you stopped)
+
+A static page cannot read your youtube.com history. What it can do is play
+videos itself and remember the position. Setup, once:
+
+1. On your phone, make a YouTube playlist (public or unlisted), for example
+   "Car". Save videos to it from the YouTube app.
+2. Settings, paste the playlist link, Save.
+
+"Car playlist" on the home page then lists those videos with thumbnails and
+plays them in an embedded player. Stop anywhere and the home page shows a
+"Continue watching" tile with the thumbnail and time left. The resume point
+is saved in that browser. The big YouTube tile still opens youtube.com for
+everything else.
+
+## Maximize
+
+The square button at the top right of every screen asks the browser for full
+screen. The live player and the YouTube view also have their own.
+
 ## Your own playlist (M3U or Xtream)
 
 Settings, paste the M3U link or the Xtream server, username and password, then

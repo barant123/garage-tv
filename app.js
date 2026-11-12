@@ -1,11 +1,12 @@
 /* Garage TV — personal media page for the Tesla browser.
-   One file: views, tile grids, HLS player, M3U/Xtream playlist, favorites, car bookmark.
+   One file: views, tile grids, HLS player, M3U/Xtream playlist, favorites, markets widgets,
+   embedded YouTube car playlist with resume, maximize, and the encrypted car bookmark.
    No build step. Everything private lives in this browser or in the #k= bookmark key. */
 
 (() => {
 'use strict';
 
-const VERSION = '1.0.0';
+const VERSION = '1.1.0';
 const PUBLIC_US = 'https://iptv-org.github.io/iptv/countries/us.m3u';
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
@@ -19,40 +20,52 @@ const store = {
 };
 
 const state = {
-  sources: { tv: [], links: [] },
-  cfg: store.get('cfg', {}),            // { m3u, xhost, xuser, xpass, channels? }
+  sources: { tv: [], links: [], markets: [] },
+  cfg: store.get('cfg', {}),            // { m3u, xhost, xuser, xpass, ytList }
   playlist: store.get('playlist', []),  // [{name,url,group,logo}]
   favs: store.get('favs', []),
+  resume: store.get('yt_resume', null), // { id, title, t, d, when }
   publicUS: null,
   tvTab: 'mine',
   plGroup: '',
-  queue: [], qi: 0,                     // current channel list + index for prev/next
+  queue: [], qi: 0,
   hls: null,
+  marketsMounted: false,
 };
 
 /* ---------- views ---------- */
-const views = ['home', 'tv', 'playlist', 'player', 'settings'];
+const views = ['home', 'markets', 'tv', 'playlist', 'youtube', 'player', 'settings'];
 let current = 'home';
-function show(name, push = true) {
-  if (name === current) return;
+function show(name, push = true, opts = {}) {
+  if (name === current && !opts.force) return;
   if (current === 'player') stopPlayer();
+  if (current === 'youtube' && name !== 'youtube') ytLeave();
   views.forEach(v => { $('#view-' + v).hidden = v !== name; });
   current = name;
   window.scrollTo(0, 0);
   if (push) history.pushState({ view: name }, '', location.href);
   if (name === 'home') renderHome();
+  if (name === 'markets') renderMarkets();
   if (name === 'tv') renderTV();
   if (name === 'playlist') renderPlaylist();
+  if (name === 'youtube') renderYouTube(opts.resume);
   if (name === 'settings') renderSettings();
 }
-window.addEventListener('popstate', e => {
-  const v = (e.state && e.state.view) || 'home';
-  show(v, false);
-});
+window.addEventListener('popstate', e => show((e.state && e.state.view) || 'home', false));
 document.addEventListener('click', e => {
   const b = e.target.closest('[data-go]');
-  if (b) { e.preventDefault(); show(b.dataset.go); }
+  if (b) { e.preventDefault(); show(b.dataset.go); return; }
+  if (e.target.closest('[data-max]')) toggleMax();
 });
+
+/* ---------- maximize (browser full screen) ---------- */
+function toggleMax() {
+  try {
+    if (document.fullscreenElement) { document.exitFullscreen().catch(() => {}); return; }
+    const p = document.documentElement.requestFullscreen && document.documentElement.requestFullscreen({ navigationUI: 'hide' });
+    if (p && p.catch) p.catch(() => alert('This browser refused full screen. Try the browser’s own full-screen control.'));
+  } catch { alert('Full screen is not available in this browser.'); }
+}
 
 /* ---------- helpers ---------- */
 function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
@@ -63,6 +76,7 @@ function toggleFav(ch) {
   store.set('favs', state.favs);
 }
 function mixedContent(url) { return isHttpsPage && /^http:\/\//i.test(url); }
+function mmss(s) { s = Math.max(0, Math.round(s || 0)); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = s % 60; return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(x).padStart(2, '0'); }
 
 function tile(ch) {
   const el = document.createElement('div');
@@ -96,9 +110,8 @@ function filterList(list, q) {
 /* ---------- M3U ---------- */
 function parseM3U(text) {
   const out = [];
-  const lines = text.split(/\r?\n/);
   let meta = null;
-  for (const raw of lines) {
+  for (const raw of text.split(/\r?\n/)) {
     const line = raw.trim();
     if (!line) continue;
     if (line.startsWith('#EXTINF')) {
@@ -133,20 +146,73 @@ async function fetchPlaylist(cfg) {
   return list;
 }
 
+/* ---------- TradingView widgets (free embeds, no key) ---------- */
+function tvWidget(container, script, cfg) {
+  container.innerHTML = '<div class="tradingview-widget-container"><div class="tradingview-widget-container__widget"></div></div>';
+  const s = document.createElement('script');
+  s.src = 'https://s3.tradingview.com/external-embedding/' + script;
+  s.async = true;
+  s.textContent = JSON.stringify(cfg);
+  container.firstChild.appendChild(s);
+}
+function mountHomeMarkets() {
+  const grid = $('#home-markets'); if (grid.dataset.done) return;
+  grid.dataset.done = '1';
+  (state.sources.markets || []).forEach(m => {
+    const card = document.createElement('div'); card.className = 'mk-card';
+    card.innerHTML = `<div class="mk-name">${esc(m.name)}</div><div class="mk-body"></div>`;
+    grid.appendChild(card);
+    tvWidget($('.mk-body', card), 'embed-widget-mini-symbol-overview.js',
+      { symbol: m.symbol, width: '100%', height: 200, locale: 'en', dateRange: '1D', colorTheme: 'dark', isTransparent: true, autosize: false, largeChartUrl: '' });
+  });
+}
+function renderMarkets() {
+  if (state.marketsMounted) return;
+  state.marketsMounted = true;
+  const ms = state.sources.markets || [];
+  tvWidget($('#mk-chart'), 'embed-widget-symbol-overview.js', {
+    symbols: ms.map(m => [m.name, m.symbol + '|1D']),
+    chartOnly: false, width: '100%', height: 460, locale: 'en', colorTheme: 'dark', autosize: false,
+    showVolume: false, hideDateRanges: false, scalePosition: 'right', scaleMode: 'Normal', fontSize: '12',
+    noTimeScale: false, valuesTracking: '1', changeMode: 'price-and-percent', chartType: 'area', isTransparent: true,
+    dateRanges: ['1d|1', '1w|30', '1m|30', '3m|60', '12m|1D'],
+  });
+  const info = $('#mk-info'); info.innerHTML = '';
+  ms.forEach(m => {
+    const box = document.createElement('div'); box.className = 'widget-box'; info.appendChild(box);
+    tvWidget(box, 'embed-widget-symbol-info.js', { symbol: m.symbol, width: '100%', locale: 'en', colorTheme: 'dark', isTransparent: true });
+  });
+  tvWidget($('#mk-events'), 'embed-widget-events.js',
+    { colorTheme: 'dark', isTransparent: true, width: '100%', height: 620, locale: 'en', importanceFilter: '0,1', countryFilter: 'us' });
+}
+
 /* ---------- HOME ---------- */
 function renderHome() {
   $('#home-playlist-sub').textContent = state.playlist.length ? `${state.playlist.length} channels` : 'Not set up';
   $('#home-tv-sub').textContent = `${state.sources.tv.length} channels + public US list`;
   const links = $('#home-links'); links.innerHTML = '';
+  const yt = document.createElement('button');
+  yt.className = 'tile link'; yt.dataset.go = 'youtube';
+  yt.innerHTML = `<span class="tile-name">Car playlist</span><span class="tile-sub">${state.cfg.ytList ? 'YouTube, remembers position' : 'Set up in Settings'}</span>`;
+  links.appendChild(yt);
   (state.sources.links || []).forEach(l => {
     const a = document.createElement('a');
     a.className = 'tile link'; a.href = l.url;
     a.innerHTML = `<span class="tile-name">${esc(l.name)}</span>`;
     links.appendChild(a);
   });
+  const r = state.resume;
+  $('#resume-wrap').hidden = !(r && r.id);
+  if (r && r.id) {
+    $('#resume-thumb').src = `https://i.ytimg.com/vi/${r.id}/mqdefault.jpg`;
+    $('#resume-title').textContent = r.title || 'YouTube video';
+    $('#resume-sub').textContent = r.d ? `Resume at ${mmss(r.t)} · ${mmss(r.d - r.t)} left` : `Resume at ${mmss(r.t)}`;
+  }
+  mountHomeMarkets();
   $('#fav-title').hidden = !state.favs.length;
   renderTiles($('#fav-grid'), state.favs);
 }
+$('#resume-tile').addEventListener('click', () => show('youtube', true, { resume: state.resume }));
 
 /* ---------- LIVE TV ---------- */
 async function renderTV() {
@@ -182,14 +248,14 @@ function renderPlaylist() {
   const groups = new Map();
   state.playlist.forEach(ch => groups.set(ch.group || 'Other', (groups.get(ch.group || 'Other') || 0) + 1));
   const chips = $('#pl-groups'); chips.innerHTML = '';
-  const mk = (name, count) => {
+  const mk = (name, count, label) => {
     const b = document.createElement('button');
     b.className = 'chip' + ((state.plGroup === name) ? ' active' : '');
-    b.innerHTML = `${esc(name)}<small>${count}</small>`;
+    b.innerHTML = `${esc(label || name)}<small>${count}</small>`;
     b.addEventListener('click', () => { state.plGroup = name; renderPlaylist(); });
     return b;
   };
-  chips.appendChild(mk('', state.playlist.length)).firstChild.textContent = 'All';
+  chips.appendChild(mk('', state.playlist.length, 'All'));
   [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0])).forEach(([g, n]) => chips.appendChild(mk(g, n)));
   let list = state.plGroup ? state.playlist.filter(ch => (ch.group || 'Other') === state.plGroup) : state.playlist;
   list = filterList(list, $('#pl-search').value);
@@ -211,7 +277,97 @@ $('#pl-refresh').addEventListener('click', async () => {
   }
 });
 
-/* ---------- PLAYER ---------- */
+/* ---------- YOUTUBE car playlist (IFrame API, remembers position) ---------- */
+let ytPlayer = null, ytReady = null, ytIds = [], ytTimer = null, ytPendingSeek = 0, ytTitles = store.get('yt_titles', {});
+function ytListId(v) { const m = String(v || '').match(/[?&]list=([A-Za-z0-9_-]+)/); return m ? m[1] : String(v || '').trim(); }
+function loadYTApi() {
+  if (ytReady) return ytReady;
+  ytReady = new Promise(res => {
+    if (window.YT && YT.Player) return res();
+    window.onYouTubeIframeAPIReady = () => res();
+    const s = document.createElement('script'); s.src = 'https://www.youtube.com/iframe_api'; document.head.appendChild(s);
+  });
+  return ytReady;
+}
+async function renderYouTube(resume) {
+  const list = ytListId(state.cfg.ytList);
+  $('#yt-empty').hidden = !!list; $('#yt-wrap').hidden = !list;
+  if (!list) return;
+  await loadYTApi();
+  if (!ytPlayer) {
+    await new Promise(res => {
+      ytPlayer = new YT.Player('yt-player', {
+        width: '100%', height: '100%',
+        playerVars: { listType: 'playlist', list, rel: 0, playsinline: 1, modestbranding: 1, enablejsapi: 1, origin: location.origin },
+        events: { onReady: () => res(), onStateChange: ytState, onError: () => {} },
+      });
+    });
+  } else if (ytPlayer.__list !== list) {
+    ytPlayer.cuePlaylist({ list, listType: 'playlist' });
+  }
+  ytPlayer.__list = list;
+  // the playlist ids arrive a moment after cueing
+  for (let i = 0; i < 20 && !(ytIds = ytPlayer.getPlaylist() || []).length; i++) await new Promise(r => setTimeout(r, 250));
+  renderYTList();
+  fetchTitles(ytIds);
+  if (resume && resume.id) {
+    const idx = ytIds.indexOf(resume.id);
+    ytPendingSeek = resume.t || 0;
+    if (idx >= 0) ytPlayer.playVideoAt(idx); else ytPlayer.loadVideoById({ videoId: resume.id, startSeconds: resume.t || 0 });
+  }
+  clearInterval(ytTimer); ytTimer = setInterval(ytSave, 5000);
+}
+function renderYTList() {
+  const box = $('#yt-list'); box.innerHTML = '';
+  const cur = ytPlayer && ytPlayer.getVideoData ? (ytPlayer.getVideoData() || {}).video_id : '';
+  ytIds.forEach((id, i) => {
+    const b = document.createElement('button');
+    b.className = 'yt-item' + (id === cur ? ' active' : '');
+    b.innerHTML = `<img src="https://i.ytimg.com/vi/${id}/mqdefault.jpg" alt="" loading="lazy"><span>${esc(ytTitles[id] || 'Video ' + (i + 1))}</span>`;
+    b.addEventListener('click', () => { ytPendingSeek = 0; ytPlayer.playVideoAt(i); });
+    box.appendChild(b);
+  });
+  if (!ytIds.length) box.innerHTML = '<p class="muted">No videos found. Is the playlist public or unlisted, and does the link contain list=?</p>';
+}
+async function fetchTitles(ids) {
+  const missing = ids.filter(id => !ytTitles[id]).slice(0, 60);
+  await Promise.all(missing.map(async id => {
+    try {
+      const r = await fetch(`https://www.youtube.com/oembed?url=${encodeURIComponent('https://www.youtube.com/watch?v=' + id)}&format=json`);
+      if (r.ok) ytTitles[id] = (await r.json()).title;
+    } catch {}
+  }));
+  if (missing.length) { store.set('yt_titles', ytTitles); renderYTList(); }
+}
+function ytState(e) {
+  const s = e.data;
+  if (s === YT.PlayerState.PLAYING) {
+    if (ytPendingSeek > 3) { ytPlayer.seekTo(ytPendingSeek, true); ytPendingSeek = 0; }
+    const d = ytPlayer.getVideoData() || {};
+    if (d.title && d.video_id) { ytTitles[d.video_id] = d.title; store.set('yt_titles', ytTitles); }
+    $('#yt-title').textContent = d.title || 'YouTube car playlist';
+    renderYTList();
+  }
+  if (s === YT.PlayerState.PAUSED) ytSave();
+  if (s === YT.PlayerState.ENDED) { state.resume = null; store.del('yt_resume'); }
+}
+function ytSave() {
+  if (!ytPlayer || !ytPlayer.getPlayerState) return;
+  const st = ytPlayer.getPlayerState();
+  if (st !== YT.PlayerState.PLAYING && st !== YT.PlayerState.PAUSED) return;
+  const d = ytPlayer.getVideoData() || {}; if (!d.video_id) return;
+  const t = ytPlayer.getCurrentTime() || 0, dur = ytPlayer.getDuration() || 0;
+  if (dur && dur - t < 20) { state.resume = null; store.del('yt_resume'); return; }
+  state.resume = { id: d.video_id, title: d.title || ytTitles[d.video_id] || '', t, d: dur, when: Date.now() };
+  store.set('yt_resume', state.resume);
+}
+function ytLeave() { ytSave(); clearInterval(ytTimer); try { ytPlayer && ytPlayer.pauseVideo(); } catch {} }
+$('#yt-fs').addEventListener('click', () => {
+  const box = $('.yt-player-box'); const iframe = box.querySelector('iframe');
+  try { (iframe && iframe.requestFullscreen ? iframe : box).requestFullscreen().catch(() => toggleMax()); } catch { toggleMax(); }
+});
+
+/* ---------- LIVE PLAYER ---------- */
 const video = $('#video');
 let overlayTimer = null;
 function showOverlay() {
@@ -226,7 +382,6 @@ function play(ch, queue) {
   state.qi = Math.max(0, state.queue.indexOf(ch));
   show('player');
   startStream(ch);
-  // fullscreen must be asked for inside the tap handler
   try { const p = document.documentElement.requestFullscreen && document.documentElement.requestFullscreen(); if (p && p.catch) p.catch(() => {}); } catch {}
 }
 function startStream(ch) {
@@ -253,7 +408,6 @@ function startStream(ch) {
     hls.on(Hls.Events.FRAG_LOADED, () => { softErrors = 0; });
     hls.on(Hls.Events.ERROR, (_, data) => {
       if (!data.fatal) {
-        // a dead variant playlist (404 over and over) never becomes fatal on its own; give up after a few
         if (++softErrors >= 6) failed(ch, data.details + (data.response ? ' ' + data.response.code : ''));
         return;
       }
@@ -295,9 +449,10 @@ video.addEventListener('pause', showOverlay);
 /* ---------- SETTINGS ---------- */
 function status(text, ok) { const s = $('#s-status'); s.textContent = text; s.className = 'note' + (ok ? ' ok' : ''); s.hidden = !text; }
 function readForm() {
-  return { m3u: $('#s-m3u').value.trim(), xhost: $('#s-xhost').value.trim(), xuser: $('#s-xuser').value.trim(), xpass: $('#s-xpass').value };
+  return { ytList: ytListId($('#s-ytlist').value), m3u: $('#s-m3u').value.trim(), xhost: $('#s-xhost').value.trim(), xuser: $('#s-xuser').value.trim(), xpass: $('#s-xpass').value };
 }
 function renderSettings() {
+  $('#s-ytlist').value = state.cfg.ytList || '';
   $('#s-m3u').value = state.cfg.m3u || '';
   $('#s-xhost').value = state.cfg.xhost || '';
   $('#s-xuser').value = state.cfg.xuser || '';
@@ -329,9 +484,9 @@ $('#s-file').addEventListener('change', async e => {
   status(`Imported ${list.length} channels from ${f.name}.`, true);
 });
 $('#s-clear').addEventListener('click', () => {
-  if (!confirm('Clear playlist, login, favorites and settings saved in this browser?')) return;
-  ['cfg', 'playlist', 'favs'].forEach(store.del);
-  state.cfg = {}; state.playlist = []; state.favs = [];
+  if (!confirm('Clear playlist, logins, favorites, resume point and settings saved in this browser?')) return;
+  ['cfg', 'playlist', 'favs', 'yt_resume', 'yt_titles'].forEach(store.del);
+  state.cfg = {}; state.playlist = []; state.favs = []; state.resume = null; ytTitles = {};
   renderSettings(); status('Cleared.', true);
 });
 
@@ -346,8 +501,7 @@ async function importKey(raw) { return crypto.subtle.importKey('raw', raw, 'AES-
 async function encryptConfig(obj, rawKey) {
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const key = await importKey(rawKey);
-  const data = new TextEncoder().encode(JSON.stringify(obj));
-  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, data);
+  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(JSON.stringify(obj)));
   return JSON.stringify({ v: 1, iv: b64u.enc(iv), data: b64u.enc(ct) });
 }
 async function decryptConfig(text, rawKey) {
@@ -360,7 +514,7 @@ $('#s-makekey').addEventListener('click', async () => {
  try {
   state.cfg = { ...state.cfg, ...readForm() }; store.set('cfg', state.cfg);
   let k = keyFromHash();
-  let raw = k ? b64u.dec(k) : crypto.getRandomValues(new Uint8Array(32));
+  const raw = k ? b64u.dec(k) : crypto.getRandomValues(new Uint8Array(32));
   k = b64u.enc(raw);
   const payload = { cfg: state.cfg, channels: state.playlist, favs: state.favs, made: new Date().toISOString() };
   const enc = await encryptConfig(payload, raw);
@@ -378,7 +532,7 @@ async function loadFromBookmark() {
   try {
     const r = await fetch('config.enc', { cache: 'no-store' }); if (!r.ok) return false;
     const o = await decryptConfig(await r.text(), b64u.dec(k));
-    if (o.cfg) { state.cfg = o.cfg; store.set('cfg', o.cfg); }
+    if (o.cfg) { state.cfg = { ...o.cfg, ...state.cfg, ...Object.fromEntries(Object.entries(o.cfg).filter(([, v]) => v)) }; store.set('cfg', state.cfg); }
     if (o.channels && o.channels.length && !state.playlist.length) { state.playlist = o.channels; store.set('playlist', o.channels); }
     if (o.favs && o.favs.length && !state.favs.length) { state.favs = o.favs; store.set('favs', o.favs); }
     return true;

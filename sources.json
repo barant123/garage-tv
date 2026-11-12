@@ -18,8 +18,12 @@
   ],
   "links": [
     {"name": "YouTube Subscriptions", "url": "https://www.youtube.com/feed/subscriptions"},
-    {"name": "YouTube History", "url": "https://www.youtube.com/feed/history"},
-    {"name": "Twitch", "url": "https://www.twitch.tv"},
-    {"name": "Kick", "url": "https://kick.com"}
+    {"name": "YouTube History", "url": "https://www.youtube.com/feed/history"}
+  ],
+  "markets": [
+    {"name": "NQ (NAS100 CFD, 24h)", "symbol": "OANDA:NAS100USD"},
+    {"name": "ES (SPX500 CFD, 24h)", "symbol": "OANDA:SPX500USD"},
+    {"name": "Google", "symbol": "NASDAQ:GOOGL"},
+    {"name": "NVIDIA", "symbol": "NASDAQ:NVDA"}
   ]
 }

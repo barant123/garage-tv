@@ -16,8 +16,20 @@
     <div class="brand">Garage TV</div>
     <div class="bar-actions">
       <button class="btn ghost" data-go="settings">Settings</button>
+      <button class="btn ghost max" data-max title="Maximize">&#x26F6;</button>
     </div>
   </header>
+
+  <div id="resume-wrap" hidden>
+    <h2 class="section-title">Continue watching</h2>
+    <button class="resume" id="resume-tile">
+      <img id="resume-thumb" alt="">
+      <span class="resume-text">
+        <span class="tile-name" id="resume-title"></span>
+        <span class="tile-sub" id="resume-sub"></span>
+      </span>
+    </button>
+  </div>
 
   <div class="grid big" id="home-grid">
     <button class="tile hero" data-go="playlist">
@@ -39,17 +51,38 @@
 
   <div id="home-links" class="grid links"></div>
 
+  <div class="section-head">
+    <h2 class="section-title">Markets today</h2>
+    <button class="btn ghost" data-go="markets">Full view &#8594;</button>
+  </div>
+  <div class="grid markets" id="home-markets"></div>
+
   <h2 class="section-title" id="fav-title" hidden>Favorites</h2>
   <div class="grid" id="fav-grid"></div>
 </section>
 
-<!-- LIVE TV (curated + public US index) -->
+<!-- MARKETS -->
+<section id="view-markets" class="view" hidden>
+  <header class="bar">
+    <button class="btn back" data-go="home">&#8592; Home</button>
+    <div class="title">Markets</div>
+    <div class="bar-actions"><button class="btn ghost max" data-max title="Maximize">&#x26F6;</button></div>
+  </header>
+  <div id="mk-chart" class="widget-box"></div>
+  <h2 class="section-title">Overview</h2>
+  <div class="grid info" id="mk-info"></div>
+  <h2 class="section-title">Economic calendar (US)</h2>
+  <div id="mk-events" class="widget-box"></div>
+</section>
+
+<!-- LIVE TV -->
 <section id="view-tv" class="view" hidden>
   <header class="bar">
     <button class="btn back" data-go="home">&#8592; Home</button>
     <div class="title">Live TV</div>
     <div class="bar-actions">
       <input type="search" id="tv-search" class="search" placeholder="Search channels">
+      <button class="btn ghost max" data-max title="Maximize">&#x26F6;</button>
     </div>
   </header>
   <div class="tabs" id="tv-tabs">
@@ -68,6 +101,7 @@
     <div class="bar-actions">
       <input type="search" id="pl-search" class="search" placeholder="Search">
       <button class="btn ghost" id="pl-refresh">Refresh</button>
+      <button class="btn ghost max" data-max title="Maximize">&#x26F6;</button>
     </div>
   </header>
   <div id="pl-empty" class="empty" hidden>
@@ -80,7 +114,28 @@
   <p class="note" id="pl-note" hidden></p>
 </section>
 
-<!-- PLAYER -->
+<!-- YOUTUBE CAR PLAYLIST (embedded player that remembers where you were) -->
+<section id="view-youtube" class="view" hidden>
+  <header class="bar">
+    <button class="btn back" data-go="home">&#8592; Home</button>
+    <div class="title" id="yt-title">YouTube car playlist</div>
+    <div class="bar-actions">
+      <button class="btn ghost" id="yt-fs">Video full screen</button>
+      <button class="btn ghost max" data-max title="Maximize">&#x26F6;</button>
+    </div>
+  </header>
+  <div id="yt-empty" class="empty" hidden>
+    <p>No car playlist set.</p>
+    <p class="muted">On your phone, make a YouTube playlist called "Car" (public or unlisted) and save videos to it. Paste its link once in Settings. Videos played here remember where you stopped.</p>
+    <button class="btn primary" data-go="settings">Open Settings</button>
+  </div>
+  <div id="yt-wrap" class="yt-wrap" hidden>
+    <div class="yt-player-box"><div id="yt-player"></div></div>
+    <div class="yt-list" id="yt-list"></div>
+  </div>
+</section>
+
+<!-- PLAYER (live streams) -->
 <section id="view-player" class="view player" hidden>
   <video id="video" playsinline controls></video>
   <div class="overlay" id="overlay">
@@ -88,6 +143,7 @@
       <button class="btn back" id="player-back">&#8592; Back</button>
       <div class="title" id="player-title"></div>
       <button class="btn ghost" id="player-fav">&#9734;</button>
+      <button class="btn ghost max" data-max title="Maximize">&#x26F6;</button>
     </div>
     <div class="overlay-mid">
       <button class="btn huge" id="player-prev">&#8249;</button>
@@ -102,10 +158,18 @@
   <header class="bar">
     <button class="btn back" data-go="home">&#8592; Home</button>
     <div class="title">Settings</div>
+    <div class="bar-actions"><button class="btn ghost max" data-max title="Maximize">&#x26F6;</button></div>
   </header>
 
   <div class="form">
-    <h2>Playlist source</h2>
+    <h2>YouTube car playlist</h2>
+    <p class="muted">Link to a YouTube playlist you control (public or unlisted). Anything you save to it on your phone shows up here with thumbnails, and the page remembers where you stopped.</p>
+    <label class="field">
+      <span>Playlist link or ID</span>
+      <input type="text" id="s-ytlist" placeholder="https://www.youtube.com/playlist?list=PL...">
+    </label>
+
+    <h2>Playlist source (IPTV)</h2>
     <p class="muted">Pick one. Nothing here is sent anywhere except to your provider when loading the list.</p>
 
     <label class="field">
@@ -126,7 +190,7 @@
 
     <div class="row">
       <button class="btn primary" id="s-save">Save on this device</button>
-      <button class="btn ghost" id="s-load">Load playlist now</button>
+      <button class="btn ghost" id="s-load">Load IPTV playlist now</button>
     </div>
     <p class="note" id="s-status" hidden></p>
 
@@ -135,7 +199,7 @@
     <input type="file" id="s-file" accept=".m3u,.m3u8,text/plain">
 
     <h2>Car bookmark (no typing in the car)</h2>
-    <p class="muted">Encrypts your playlist settings with a key that lives only in the bookmark. Save the file as <code>config.enc</code> in the site folder, publish it, then bookmark the link below in the car. Anyone opening the plain site gets nothing.</p>
+    <p class="muted">Encrypts your settings with a key that lives only in the bookmark. Save the file as <code>config.enc</code> in the site folder, publish it, then bookmark the link below in the car. Anyone opening the plain site gets nothing.</p>
     <div class="row">
       <button class="btn primary" id="s-makekey">Make car bookmark</button>
       <button class="btn ghost" id="s-download" hidden>Download config.enc</button>
