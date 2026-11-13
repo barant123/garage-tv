@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600&display=swap">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
-<link rel="stylesheet" href="style.css?v=4.0.3">
+<link rel="stylesheet" href="style.css?v=4.0.4">
 </head>
 <body>
 
@@ -309,7 +309,7 @@
     <label class="field"><span>My playlist (optional, a playlist link you control)</span><input type="text" id="s-ytlist" placeholder="https://www.youtube.com/playlist?list=PL..."></label>
 
     <h2>Traffic: police and hazards</h2>
-    <p class="muted">Without a relay the Traffic box shows Waze jams only. A free Cloudflare Worker relay (file <code>tools/waze-relay.js</code> in the repo, setup steps inside it) adds police, crashes, hazards and closures on a clean map. Paste the worker's address here.</p>
+    <p class="muted">The Traffic box shows Waze jams. Police, crashes and hazards would need the relay in <code>tools/waze-relay.js</code>, but as of Nov 2026 Waze blocks every relay (reCAPTCHA), so this field does nothing useful yet. If Waze ever opens the feed again, paste the worker address here and the pins appear.</p>
     <label class="field"><span>Traffic relay URL (optional)</span><input type="text" id="s-relay" placeholder="https://garage-tv-relay.yourname.workers.dev" autocomplete="off"></label>
 
     <div class="row"><button class="btn primary" id="s-save">Save</button></div>
@@ -330,6 +330,6 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/hls.js/1.5.17/hls.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
-<script src="app.js?v=4.0.3"></script>
+<script src="app.js?v=4.0.4"></script>
 </body>
 </html>

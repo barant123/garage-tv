@@ -11,7 +11,7 @@
 (() => {
 'use strict';
 
-const VERSION = '4.0.3';
+const VERSION = '4.0.4';
 const PUBLIC_US = 'https://iptv-org.github.io/iptv/countries/us.m3u';
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
@@ -974,7 +974,7 @@ async function renderTraffic(force) {
     box.hidden = true; embed.hidden = false; live.hidden = false;
     const src = `https://embed.waze.com/iframe?zoom=13&lat=${geo.lat.toFixed(4)}&lon=${geo.lon.toFixed(4)}&ct=livemap`;
     if (embed.dataset.src !== src) { embed.src = src; embed.dataset.src = src; }
-    sub.textContent = 'jams · add a relay in Settings for police';
+    sub.textContent = 'live jams around the car';
     meta.textContent = 'Waze';
     legend.innerHTML = '<span><i style="background:#22c55e"></i>free</span><span><i style="background:#f59e0b"></i>slow</span><span><i style="background:#ef4444"></i>jam</span><span><i style="background:#7f1d1d"></i>standstill</span>';
     return;

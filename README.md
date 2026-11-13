@@ -72,9 +72,10 @@ Traffic without a relay shows the plain Waze map (jams only; it cannot draw repo
 Police, crashes, hazards and closures need Waze's live-map feed, which refuses
 browsers, so `tools/waze-relay.js` is a tiny Cloudflare Worker (free) that fetches it
 for the box around the car, trims and caches it for a minute, and hands it to the page.
-Deploy it (steps are in the file), paste the worker URL in Settings, save, re-bookmark
-the car link. It is an unofficial feed and may stop working if Waze changes it; the
-page then falls back to the plain map.
+Status Nov 2026: Waze fronts that feed with reCAPTCHA Enterprise and answers 403 to every
+relay, including this one (deployed and tested), so police pins do not work today. The
+worker and the Settings field stay in place in case Waze opens the feed again; the page
+falls back to the plain jams map whenever the relay is refused.
 
 ## Markets
 
