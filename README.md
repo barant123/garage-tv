@@ -9,6 +9,8 @@ sections that remember their state and their own preferences:
 | YouTube | Search, trending, categories, channels you follow, your playlist, history. Plays inside the app and remembers where you stopped |
 | Sports | ESPN scoreboards per league; your favorite teams pinned on top with today's game or the next one |
 | Markets | Live cards and chart for your own tickers, plus a US economic calendar with today and impact highlighted |
+| Weather (right column) | Live NEXRAD radar centered on the car, current temperature and conditions, next hours |
+| Traffic (right column) | Live Waze jams around the car; with the optional relay also police, crashes, hazards and closures |
 
 No accounts, no server. Files:
 
@@ -20,6 +22,7 @@ No accounts, no server. Files:
 | `data/locals.json` | US local stations with an https stream, tagged by city and state (iptv-org) |
 | `data/teams.json` | team lists per league for the favorites picker (ESPN) |
 | `tools/build_data.py` | builds the three data files |
+| `tools/waze-relay.js` | optional Cloudflare Worker that relays Waze alerts (police) to the page; setup steps inside |
 | `.github/workflows/data.yml` | runs the builder every 4 hours and commits the result |
 
 ## Use it in the car
@@ -58,6 +61,21 @@ The free quota is 10,000 units a day: a search costs 100, trending and
 channel feeds cost 1 each. Videos whose owner blocks embedding show an
 "open on youtube.com" link instead.
 
+## Weather and traffic
+
+Both follow the car. The page asks the browser for location (allow it once in the
+car); if refused, it uses the connection's rough location. Weather numbers come from
+Open-Meteo with the US National Weather Service as a fallback, radar tiles from the
+Iowa State Mesonet NEXRAD composite. No keys.
+
+Traffic without a relay shows the plain Waze map (jams only; it cannot draw reports).
+Police, crashes, hazards and closures need Waze's live-map feed, which refuses
+browsers, so `tools/waze-relay.js` is a tiny Cloudflare Worker (free) that fetches it
+for the box around the car, trims and caches it for a minute, and hands it to the page.
+Deploy it (steps are in the file), paste the worker URL in Settings, save, re-bookmark
+the car link. It is an unofficial feed and may stop working if Waze changes it; the
+page then falls back to the plain map.
+
 ## Markets
 
 TradingView free embeds, no key. CME futures (NQ1!, ES1!) are licensed data
@@ -72,7 +90,7 @@ light orange, and today is marked.
 
 ## Publish
 
-GitHub Pages: push this folder to a public repo, Settings, Pages, deploy from
+GitHub Pages: push this folder (without `mock-v4.html`) to a public repo, Settings, Pages, deploy from
 branch `main`, folder `/ (root)`. The data workflow needs Actions enabled
 (default on public repos). Run it once by hand from the Actions tab to check.
 

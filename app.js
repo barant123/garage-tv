@@ -4,12 +4,14 @@
      YouTube   search, trending, categories, followed channels, playlist, history (YouTube Data API key)
      Sports    ESPN scoreboards with favorite teams pinned on top
      Markets   TradingView cards/chart with editable tickers + US economic calendar (data/calendar.json)
+     Side      Weather radar + conditions (NEXRAD via Iowa State Mesonet, Open-Meteo) and live traffic around the car
+               (Waze jams, plus police/crashes/hazards through the optional relay in tools/waze-relay.js)
    No build step, no accounts. Preferences live in this browser and in the car link (#p=...). */
 
 (() => {
 'use strict';
 
-const VERSION = '3.0.1';
+const VERSION = '4.0.0';
 const PUBLIC_US = 'https://iptv-org.github.io/iptv/countries/us.m3u';
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
@@ -21,7 +23,7 @@ const store = {
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
   del(k)    { try { localStorage.removeItem(k); } catch {} },
 };
-const PREF_DEFAULTS = { ytKey: '', ytList: '', follows: [], tickers: null, teams: [], loc: null };
+const PREF_DEFAULTS = { ytKey: '', ytList: '', follows: [], tickers: null, teams: [], loc: null, relay: '' };
 const UI_DEFAULTS = { open: {}, tvTab: 'local', ytTab: 'trending', spTab: 'favs', calOpen: false };
 const prefs = { ...PREF_DEFAULTS, ...store.get('prefs', {}) };
 const ui = { ...UI_DEFAULTS, ...store.get('ui', {}) };
@@ -57,6 +59,8 @@ document.addEventListener('click', e => {
   const go = e.target.closest('[data-go]');
   if (go) { e.preventDefault(); show(go.dataset.go); return; }
   if (e.target.closest('[data-max]')) { toggleMax(); return; }
+  const quick = e.target.closest('[data-quick]');
+  if (quick) { quickJump(quick); return; }
   const sub = e.target.closest('.sub-head');
   if (sub) { toggleSub(sub.parentElement); return; }
   const head = e.target.closest('.sec-head');
@@ -76,6 +80,16 @@ function onSectionOpen(key) {
   if (key === 'yt') renderYTTab();
   if (key === 'sp') renderSports();
   if (key === 'mk') { mountMarkets(); if (ui.calOpen) renderCalendar(); }
+}
+function quickJump(el) {
+  const sec = el.closest('.sec'), [k, v] = el.dataset.quick.split(':');
+  if (k === 'tvtab') { ui.tvTab = v; saveUI(); }
+  if (k === 'yttab') { ui.ytTab = v; saveUI(); }
+  if (k === 'lg') { ui.spTab = v; saveUI(); }
+  toggleSection(sec, true);
+  if (k === 'ytsearch') setTimeout(() => $('#yt-q').focus(), 350);
+  if (k === 'cal') toggleSub($('.sub[data-sub=cal]'), true);
+  setTimeout(() => sec.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
 }
 function toggleSub(sub, force) {
   const open = force == null ? !sub.classList.contains('open') : force;
@@ -190,6 +204,22 @@ function renderHome() {
   $('#yt-meta').textContent = ytMetaText();
   $('#sp-meta').textContent = prefs.teams.length ? prefs.teams.map(t => t.abbr).join(' · ') : 'pick your teams';
   $('#mk-meta').textContent = tickers().map(m => m.name.split(' ')[0]).join(' · ');
+  renderNextEvent();
+  startSide();
+  Object.values(maps).forEach(m => m && setTimeout(() => m.invalidateSize(), 60));
+}
+async function renderNextEvent() {
+  const el = $('#mk-next'); if (!el) return;
+  try {
+    if (!state.calendar) state.calendar = await getJSON('data/calendar.json', { cache: 'no-store' });
+    const now = Date.now(), todayKey = new Date().toDateString();
+    const ev = (state.calendar.events || []).map(e => ({ ...e, ts: new Date(e.d).getTime() }))
+      .filter(e => e.i === 'High' && e.ts > now - 30 * 60e3).sort((a, b) => a.ts - b.ts)[0];
+    if (!ev) { el.textContent = ''; return; }
+    const dt = new Date(ev.ts), today = dt.toDateString() === todayKey;
+    el.textContent = (ev.t.length > 24 ? ev.t.slice(0, 23) + '…' : ev.t) + ' · ' +
+      (today ? '' : dt.toLocaleDateString([], { weekday: 'short' }) + ' ') + dt.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  } catch { el.textContent = ''; }
 }
 
 /* ======================================================================
@@ -222,7 +252,7 @@ async function detectLocation() {
   if (cached && Date.now() - cached.at < 12 * 3600e3) return cached.loc;
   const d = await getJSON('https://ipapi.co/json/');
   if (d.country_code !== 'US') throw new Error('Outside the US (' + d.country_name + ')');
-  const loc = { state: d.region_code, city: d.city, auto: true };
+  const loc = { state: d.region_code, city: d.city, auto: true, lat: d.latitude, lon: d.longitude };
   store.set('loc_auto', { at: Date.now(), loc });
   return loc;
 }
@@ -767,6 +797,232 @@ $('#player-fav').addEventListener('click', () => { const ch = state.queue[state.
 $('#view-player').addEventListener('click', e => { if (!e.target.closest('.btn')) showOverlay(); });
 video.addEventListener('pause', showOverlay);
 
+
+/* ======================================================================
+   CAR LOCATION + WEATHER + TRAFFIC (the right column)
+   ====================================================================== */
+const DEFAULT_GEO = { lat: 33.4484, lon: -112.074, src: 'default' };   // used only until a real fix arrives
+let geo = store.get('geo_auto', null);
+const maps = { wx: null, tr: null };
+function geoOK(g) { return !!g && Number.isFinite(g.lat) && Number.isFinite(g.lon); }
+function hasLeaflet() { return typeof L !== 'undefined'; }
+function km(a, b) {
+  const R = 6371, dLat = (b.lat - a.lat) * Math.PI / 180, dLon = (b.lon - a.lon) * Math.PI / 180;
+  const x = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * Math.PI / 180) * Math.cos(b.lat * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(x));
+}
+function browserGeo() {
+  return new Promise((res, rej) => {
+    if (!navigator.geolocation) return rej(new Error('no geolocation'));
+    navigator.geolocation.getCurrentPosition(
+      p => res({ lat: p.coords.latitude, lon: p.coords.longitude, src: 'gps' }),
+      e => rej(e), { timeout: 8000, maximumAge: 120e3, enableHighAccuracy: false });
+  });
+}
+async function ipGeo() {
+  const c = store.get('loc_auto', null);
+  if (c && c.loc && Number.isFinite(c.loc.lat) && Date.now() - c.at < 12 * 3600e3) return { lat: c.loc.lat, lon: c.loc.lon, src: 'ip' };
+  const d = await getJSON('https://ipapi.co/json/');
+  if (d.country_code === 'US') store.set('loc_auto', { at: Date.now(), loc: { state: d.region_code, city: d.city, auto: true, lat: d.latitude, lon: d.longitude } });
+  return { lat: d.latitude, lon: d.longitude, src: 'ip' };
+}
+async function locate() {
+  let g = null;
+  try { g = await browserGeo(); } catch {}
+  if (!g) { try { g = await ipGeo(); } catch {} }
+  if (!g) g = geoOK(geo) ? geo : DEFAULT_GEO;
+  const moved = !geoOK(geo) || km(geo, g) > 0.5;
+  geo = { ...g, at: Date.now() }; store.set('geo_auto', geo);
+  return moved;
+}
+function geoName() {
+  const c = store.get('loc_auto', null), loc = prefs.loc || (c && c.loc);
+  return loc ? locLabel(loc) : (geo.src === 'default' ? 'Phoenix, AZ (default)' : 'car position');
+}
+
+function mkMap(id, zoom) {
+  const m = L.map(id, { zoomControl: false, dragging: false, scrollWheelZoom: false, doubleClickZoom: false, boxZoom: false,
+    keyboard: false, touchZoom: false, tap: false, attributionControl: true });
+  m.attributionControl.setPrefix(false);
+  // Esri's dark canvas: free with attribution, no key, no referer rules.
+  const esri = 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_';
+  L.tileLayer(esri + 'Base/MapServer/tile/{z}/{y}/{x}', { maxNativeZoom: 16, maxZoom: 16, attribution: 'Esri, HERE, Garmin, OpenStreetMap' }).addTo(m);
+  L.tileLayer(esri + 'Reference/MapServer/tile/{z}/{y}/{x}', { maxNativeZoom: 16, maxZoom: 16, zIndex: 3, opacity: .9 }).addTo(m);
+  m.setView([geo.lat, geo.lon], zoom);
+  m.car = L.marker([geo.lat, geo.lon], { icon: L.divIcon({ className: 'car-dot', iconSize: [18, 18] }), interactive: false, zIndexOffset: 1000 }).addTo(m);
+  return m;
+}
+function recenter(m) { if (!m) return; m.setView([geo.lat, geo.lon], m.getZoom(), { animate: false }); m.car.setLatLng([geo.lat, geo.lon]); }
+
+/* ---------- weather: RainViewer radar on a dark map, Open-Meteo numbers ---------- */
+const WX_ICON = {
+  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+  moon: '<path d="M20 14a8 8 0 1 1-10-10 6 6 0 0 0 10 10z"/>',
+  'cloud-sun': '<circle cx="8" cy="8" r="3"/><path d="M8 2v1.5M2 8h1.5M3.8 3.8l1 1M13 4l-1 1"/><path d="M10 20h8a3.5 3.5 0 0 0 .5-7A5 5 0 0 0 9 14a3 3 0 0 0 1 6z"/>',
+  cloud: '<path d="M7 18h10a4 4 0 0 0 0-8 6 6 0 0 0-11 2 3 3 0 0 0 1 6z"/>',
+  fog: '<path d="M4 10h16M4 14h12M8 18h12"/>',
+  rain: '<path d="M7 15h10a4 4 0 0 0 0-8 6 6 0 0 0-11 2 3 3 0 0 0 1 6z"/><path d="M8 18l-1 3M12 18l-1 3M16 18l-1 3"/>',
+  snow: '<path d="M7 15h10a4 4 0 0 0 0-8 6 6 0 0 0-11 2 3 3 0 0 0 1 6z"/><path d="M8 19h.01M12 21h.01M16 19h.01"/>',
+  storm: '<path d="M7 14h10a4 4 0 0 0 0-8 6 6 0 0 0-11 2 3 3 0 0 0 1 6z"/><path d="M13 13l-2 4h3l-2 4"/>',
+};
+function wxKind(code, isDay) {
+  const c = +code || 0, night = isDay === 0;
+  if (c === 0) return [night ? 'Clear' : 'Sunny', night ? 'moon' : 'sun'];
+  if (c <= 2) return ['Partly cloudy', night ? 'moon' : 'cloud-sun'];
+  if (c === 3) return ['Overcast', 'cloud'];
+  if (c <= 48) return ['Fog', 'fog'];
+  if (c <= 57) return ['Drizzle', 'rain'];
+  if (c <= 67) return ['Rain', 'rain'];
+  if (c <= 77) return ['Snow', 'snow'];
+  if (c <= 82) return ['Showers', 'rain'];
+  if (c <= 86) return ['Snow showers', 'snow'];
+  return ['Thunderstorm', 'storm'];
+}
+function wxSvg(icon) { return `<svg class="wi-${icon}" viewBox="0 0 24 24">${WX_ICON[icon] || WX_ICON.cloud}</svg>`; }
+let wxAt = 0, radarAt = 0, radarLayer = null;
+async function renderWeather(force) {
+  if (!geoOK(geo)) return;
+  const sub = $('#wx-sub'), meta = $('#wx-meta');
+  if (hasLeaflet() && !maps.wx) { try { maps.wx = mkMap('wx-map', 8); } catch {} }
+  else if (force && maps.wx) recenter(maps.wx);
+  if (maps.wx && (force || Date.now() - radarAt > 5 * 60e3)) {
+    // NEXRAD composite from Iowa State Mesonet (free, no key, refreshed every ~5 min). The stamp defeats tile caching.
+    try {
+      const nl = L.tileLayer('https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/nexrad-n0q-900913/{z}/{x}/{y}.png?t=' + Math.floor(Date.now() / 300e3),
+        { opacity: .8, maxNativeZoom: 10, zIndex: 5, attribution: 'NEXRAD via IEM' }).addTo(maps.wx);
+      const old = radarLayer; radarLayer = nl; radarAt = Date.now();
+      if (old) setTimeout(() => { try { maps.wx.removeLayer(old); } catch {} }, 2500);
+    } catch {}
+  }
+  if (!force && Date.now() - wxAt < 10 * 60e3) return;
+  try {
+    let w;
+    try { w = await openMeteo(); } catch (e1) { w = await nwsWeather(); }
+    $('#wx-temp').innerHTML = Math.round(w.temp) + '<sup>°F</sup>';
+    $('#wx-cond').innerHTML = wxSvg(w.icon) + esc(w.label);
+    $('#wx-hl').textContent = `H ${Math.round(w.hi)}° · L ${Math.round(w.lo)}° · ${w.pop ?? 0}% rain`;
+    $('#wx-now').hidden = false;
+    $('#wx-hours').innerHTML = w.hours.map(h => `<div>${h.lab}${wxSvg(h.icon)}<b>${Math.round(h.temp)}°</b>${h.pop >= 20 ? `<span>${h.pop}%</span>` : ''}</div>`).join('');
+    wxAt = Date.now();
+    sub.textContent = geoName() + ' · radar';
+    meta.textContent = 'updated ' + new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) + (w.src === 'nws' ? ' · NWS' : '');
+  } catch (e) { meta.textContent = 'weather unavailable'; }
+}
+function hourLab(ms) { const h = new Date(ms).getHours(); return (h % 12 || 12) + (h < 12 ? 'a' : 'p'); }
+async function openMeteo() {
+  const q = `latitude=${geo.lat.toFixed(4)}&longitude=${geo.lon.toFixed(4)}&current=temperature_2m,weather_code,is_day` +
+    '&hourly=temperature_2m,weather_code,precipitation_probability&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max' +
+    '&temperature_unit=fahrenheit&timezone=auto&forecast_days=2';
+  const d = await getJSON('https://api.open-meteo.com/v1/forecast?' + q);
+  const c = d.current, [label, icon] = wxKind(c.weather_code, c.is_day);
+  const now = Date.now(), times = d.hourly.time.map(t => new Date(t).getTime());
+  let i = times.findIndex(t => t > now); if (i < 0) i = 0;
+  const hours = [];
+  for (let k = i; k < times.length && hours.length < 6; k += 2) {
+    const h = new Date(times[k]).getHours();
+    hours.push({ lab: hourLab(times[k]), icon: wxKind(d.hourly.weather_code[k], h >= 6 && h < 19 ? 1 : 0)[1], temp: d.hourly.temperature_2m[k], pop: d.hourly.precipitation_probability[k] || 0 });
+  }
+  return { src: 'open-meteo', temp: c.temperature_2m, label, icon, hi: d.daily.temperature_2m_max[0], lo: d.daily.temperature_2m_min[0], pop: d.daily.precipitation_probability_max[0], hours };
+}
+function nwsKind(text, day) {
+  const t = String(text || '').toLowerCase();
+  if (/thunder/.test(t)) return ['Thunderstorm', 'storm'];
+  if (/snow|flurr|sleet|ice/.test(t)) return ['Snow', 'snow'];
+  if (/rain|shower|drizzle/.test(t)) return ['Rain', 'rain'];
+  if (/fog|haze|smoke/.test(t)) return ['Fog', 'fog'];
+  if (/mostly cloudy|cloudy|overcast/.test(t) && !/partly/.test(t)) return ['Cloudy', 'cloud'];
+  if (/partly|mostly sunny|mostly clear/.test(t)) return ['Partly cloudy', day ? 'cloud-sun' : 'moon'];
+  return [day ? 'Sunny' : 'Clear', day ? 'sun' : 'moon'];
+}
+async function nwsWeather() {
+  // US National Weather Service: free, no key. Two hops: point → hourly + daily forecast.
+  const pt = await getJSON(`https://api.weather.gov/points/${geo.lat.toFixed(4)},${geo.lon.toFixed(4)}`);
+  const [hf, df] = await Promise.all([getJSON(pt.properties.forecastHourly), getJSON(pt.properties.forecast)]);
+  const hp = hf.properties.periods || [], dp = df.properties.periods || [];
+  const c = hp[0], [label, icon] = nwsKind(c.shortForecast, c.isDaytime);
+  const hours = [];
+  for (let k = 1; k < hp.length && hours.length < 6; k += 2) {
+    const h = hp[k];
+    hours.push({ lab: hourLab(new Date(h.startTime).getTime()), icon: nwsKind(h.shortForecast, h.isDaytime)[1], temp: h.temperature, pop: (h.probabilityOfPrecipitation && h.probabilityOfPrecipitation.value) || 0 });
+  }
+  const dayP = dp.find(x => x.isDaytime) || dp[0], nightP = dp.find(x => !x.isDaytime) || dp[1] || dp[0];
+  return { src: 'nws', temp: c.temperature, label, icon, hi: dayP ? dayP.temperature : c.temperature, lo: nightP ? nightP.temperature : c.temperature,
+    pop: (dayP && dayP.probabilityOfPrecipitation && dayP.probabilityOfPrecipitation.value) || 0, hours };
+}
+
+/* ---------- traffic: Waze jams + police/crashes/hazards through the relay ---------- */
+const AL_KIND = { POLICE: ['police', 'P', 'police'], ACCIDENT: ['crash', '!', 'crashes'], HAZARD: ['hazard', '▲', 'hazards'], ROAD_CLOSED: ['closed', '×', 'closures'] };
+const JAM_COLOR = { 1: '#facc15', 2: '#fb923c', 3: '#ef4444', 4: '#b91c1c', 5: '#7f1d1d' };
+let trAt = 0, trLayer = null;
+function relayUrl() { return (prefs.relay || '').trim().replace(/\/+$/, ''); }
+async function relayJSON(url) {
+  const r = await fetch(url); let d = {};
+  try { d = await r.json(); } catch {}
+  if (!r.ok) throw new Error(d.error || 'HTTP ' + r.status);
+  return d;
+}
+async function renderTraffic(force) {
+  if (!geoOK(geo)) return;
+  const sub = $('#tr-sub'), meta = $('#tr-meta'), legend = $('#tr-legend'), embed = $('#tr-embed'), live = $('#tr-live'), box = $('#tr-map');
+  const relay = relayUrl();
+  if (!relay || !hasLeaflet()) {
+    if (maps.tr) { try { maps.tr.remove(); } catch {} maps.tr = null; trLayer = null; }
+    box.hidden = true; embed.hidden = false; live.hidden = false;
+    const src = `https://embed.waze.com/iframe?zoom=13&lat=${geo.lat.toFixed(4)}&lon=${geo.lon.toFixed(4)}&ct=livemap`;
+    if (embed.dataset.src !== src) { embed.src = src; embed.dataset.src = src; }
+    sub.textContent = 'jams · add a relay in Settings for police';
+    meta.textContent = 'Waze';
+    legend.innerHTML = '<span><i style="background:#22c55e"></i>free</span><span><i style="background:#f59e0b"></i>slow</span><span><i style="background:#ef4444"></i>jam</span><span><i style="background:#7f1d1d"></i>standstill</span>';
+    return;
+  }
+  if (!embed.hidden) { embed.hidden = true; embed.removeAttribute('src'); embed.dataset.src = ''; }
+  box.hidden = false; live.hidden = false;
+  if (!maps.tr) { try { maps.tr = mkMap('tr-map', 12); } catch { return; } }
+  else if (force) recenter(maps.tr);
+  if (!force && Date.now() - trAt < 2 * 60e3) return;
+  try {
+    const b = maps.tr.getBounds().pad(0.15);
+    const d = await relayJSON(`${relay}/waze?top=${b.getNorth().toFixed(4)}&bottom=${b.getSouth().toFixed(4)}&left=${b.getWest().toFixed(4)}&right=${b.getEast().toFixed(4)}`);
+    const g = L.layerGroup(), counts = {};
+    (d.jams || []).forEach(j => L.polyline(j.line, { color: JAM_COLOR[Math.min(5, Math.max(1, j.l || 1))], weight: 5, opacity: .9, lineCap: 'round', interactive: false }).addTo(g));
+    (d.alerts || []).forEach(a => {
+      const k = AL_KIND[a.t]; if (!k) return;
+      counts[k[0]] = (counts[k[0]] || 0) + 1;
+      L.marker([a.y, a.x], { icon: L.divIcon({ className: 'al al-' + k[0], html: k[1], iconSize: [22, 22] }), interactive: false, zIndexOffset: k[0] === 'police' ? 500 : 100 }).addTo(g);
+    });
+    if (trLayer) { try { maps.tr.removeLayer(trLayer); } catch {} }
+    trLayer = g.addTo(maps.tr); trAt = Date.now();
+    legend.innerHTML = Object.values(AL_KIND).map(k => `<span><i class="al al-${k[0]}">${k[1]}</i>${counts[k[0]] || 0} ${k[2]}</span>`).join('');
+    sub.textContent = `${(d.jams || []).length} jams around the car`;
+    meta.textContent = 'updated ' + new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  } catch (e) {
+    meta.textContent = 'relay: ' + (e.message || 'error');
+    if (!trLayer) legend.innerHTML = `<span class="muted">Relay not answering (${esc(e.message || 'error')}). Check the URL in Settings.</span>`;
+  }
+}
+
+/* ---------- scheduler: only while the home page is on screen ---------- */
+let sideStarted = false, geoAt = 0, sideBusy = false;
+async function refreshSide(force) {
+  if (current !== 'home' || document.hidden || sideBusy) return;
+  sideBusy = true;
+  try {
+    if (force || Date.now() - geoAt > 5 * 60e3) {
+      const moved = await locate(); geoAt = Date.now();
+      if (moved) { force = true; recenter(maps.wx); recenter(maps.tr); }
+    }
+    await Promise.all([renderWeather(force), renderTraffic(force)]);
+  } finally { sideBusy = false; }
+}
+function startSide() {
+  if (sideStarted) { refreshSide(false); return; }
+  sideStarted = true;
+  refreshSide(true);
+  setInterval(() => refreshSide(false), 60e3);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshSide(false); });
+  window.addEventListener('resize', () => Object.values(maps).forEach(m => m && m.invalidateSize()));
+}
+
 /* ======================================================================
    SETTINGS + car link (#p= carries every preference)
    ====================================================================== */
@@ -776,11 +1032,12 @@ function carLink() {
   return location.origin + location.pathname + (Object.keys(p).length ? '#p=' + b64u.enc(JSON.stringify(p)) : '');
 }
 function renderSettings() {
-  $('#s-ytkey').value = prefs.ytKey || ''; $('#s-ytlist').value = prefs.ytList || '';
+  $('#s-ytkey').value = prefs.ytKey || ''; $('#s-ytlist').value = prefs.ytList || ''; $('#s-relay').value = prefs.relay || '';
   $('#s-carlink').value = carLink(); $('#s-version').textContent = `Garage TV ${VERSION}`; status('');
 }
 $('#s-save').addEventListener('click', () => {
-  prefs.ytKey = $('#s-ytkey').value.trim(); prefs.ytList = ytListId($('#s-ytlist').value); savePrefs();
+  prefs.ytKey = $('#s-ytkey').value.trim(); prefs.ytList = ytListId($('#s-ytlist').value);
+  prefs.relay = $('#s-relay').value.trim().replace(/\/+$/, ''); trAt = 0; savePrefs();
   Object.keys(ytCache).forEach(k => delete ytCache[k]);
   history.replaceState(history.state, '', carLink());
   status('Saved. Bookmark the car link below so the car never needs this typed.', true);
@@ -788,7 +1045,7 @@ $('#s-save').addEventListener('click', () => {
 });
 $('#s-clear').addEventListener('click', () => {
   if (!confirm('Clear every preference, favorite, history item and section layout saved in this browser?')) return;
-  ['prefs', 'ui', 'favs', 'yt_hist', 'yt_titles', 'loc_auto'].forEach(store.del);
+  ['prefs', 'ui', 'favs', 'yt_hist', 'yt_titles', 'loc_auto', 'geo_auto'].forEach(store.del);
   Object.keys(localStorage).filter(k => k.startsWith('sp_next_')).forEach(store.del);
   location.replace(location.pathname);
 });
