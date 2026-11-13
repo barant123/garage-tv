@@ -11,7 +11,7 @@
 (() => {
 'use strict';
 
-const VERSION = '4.0.5';
+const VERSION = '4.1.0';
 const PUBLIC_US = 'https://iptv-org.github.io/iptv/countries/us.m3u';
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
@@ -883,7 +883,7 @@ let wxAt = 0, radarAt = 0, radarLayer = null;
 async function renderWeather(force) {
   if (!geoOK(geo)) return;
   const sub = $('#wx-sub'), meta = $('#wx-meta');
-  if (hasLeaflet() && !maps.wx) { try { maps.wx = mkMap('wx-map', 8); } catch {} }
+  if (hasLeaflet() && !maps.wx) { try { maps.wx = mkMap('wx-map', 10); } catch {} }
   else if (force && maps.wx) recenter(maps.wx);
   if (maps.wx && (force || Date.now() - radarAt > 5 * 60e3)) {
     // NEXRAD composite from Iowa State Mesonet (free, no key, refreshed every ~5 min). The stamp defeats tile caching.
