@@ -273,7 +273,12 @@ select option { background: #0f141b; color: var(--text); }
 .home-grid { display: grid; grid-template-columns: minmax(0, 1fr) 440px; gap: 18px; align-items: start; }
 .home-main { min-width: 0; }
 .home-side { display: flex; flex-direction: column; gap: 14px; margin-top: 12px; position: sticky; top: 90px; }
-@media (max-width: 1399px) { .home-grid { grid-template-columns: 1fr; } .home-side { position: static; } }
+@media (max-width: 1399px) {
+  .home-grid { grid-template-columns: 1fr; }
+  .home-side { position: static; display: grid; grid-template-columns: 1fr 1fr; align-items: start; }
+  .map { aspect-ratio: 4 / 3; }
+}
+@media (max-width: 760px) { .home-side { grid-template-columns: 1fr; } }
 
 /* ---------- side widgets: weather + traffic ---------- */
 .wid { border-radius: 20px; border: 1px solid var(--line); overflow: hidden;
