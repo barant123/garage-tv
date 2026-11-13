@@ -11,7 +11,7 @@
 (() => {
 'use strict';
 
-const VERSION = '4.0.1';
+const VERSION = '4.0.2';
 const PUBLIC_US = 'https://iptv-org.github.io/iptv/countries/us.m3u';
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
@@ -953,7 +953,11 @@ async function nwsWeather() {
 /* ---------- traffic: Waze jams + police/crashes/hazards through the relay ---------- */
 const AL_KIND = { POLICE: ['police', 'P', 'police'], ACCIDENT: ['crash', '!', 'crashes'], HAZARD: ['hazard', '▲', 'hazards'], ROAD_CLOSED: ['closed', '×', 'closures'] };
 const JAM_COLOR = { 1: '#facc15', 2: '#fb923c', 3: '#ef4444', 4: '#b91c1c', 5: '#7f1d1d' };
-let trAt = 0, trLayer = null;
+let trAt = 0, trLayer = null, trBlocked = 0;
+function recenterEmbed(embed) {
+  const src = `https://embed.waze.com/iframe?zoom=13&lat=${geo.lat.toFixed(4)}&lon=${geo.lon.toFixed(4)}&ct=livemap`;
+  if (embed.dataset.src !== src) { embed.src = src; embed.dataset.src = src; }
+}
 function relayUrl() { return (prefs.relay || '').trim().replace(/\/+$/, ''); }
 async function relayJSON(url) {
   const r = await fetch(url); let d = {};
@@ -975,6 +979,7 @@ async function renderTraffic(force) {
     legend.innerHTML = '<span><i style="background:#22c55e"></i>free</span><span><i style="background:#f59e0b"></i>slow</span><span><i style="background:#ef4444"></i>jam</span><span><i style="background:#7f1d1d"></i>standstill</span>';
     return;
   }
+  if (trBlocked && Date.now() - trBlocked < 30 * 60e3) { if (force) recenterEmbed(embed); return; }
   if (!embed.hidden) { embed.hidden = true; embed.removeAttribute('src'); embed.dataset.src = ''; }
   box.hidden = false; live.hidden = false;
   if (!maps.tr) { try { maps.tr = mkMap('tr-map', 12); } catch { return; } }
@@ -996,8 +1001,16 @@ async function renderTraffic(force) {
     sub.textContent = `${(d.jams || []).length} jams around the car`;
     meta.textContent = 'updated ' + new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
   } catch (e) {
-    meta.textContent = 'relay: ' + (e.message || 'error');
-    if (!trLayer) legend.innerHTML = `<span class="muted">Relay not answering (${esc(e.message || 'error')}). Check the URL in Settings.</span>`;
+    // Relay missing or Waze refusing it (it now sits behind reCAPTCHA): show the plain Waze map instead.
+    if (trLayer) { meta.textContent = 'relay: ' + (e.message || 'error'); return; }
+    trBlocked = Date.now();
+    if (maps.tr) { try { maps.tr.remove(); } catch {} maps.tr = null; }
+    box.hidden = true; embed.hidden = false;
+    const src = `https://embed.waze.com/iframe?zoom=13&lat=${geo.lat.toFixed(4)}&lon=${geo.lon.toFixed(4)}&ct=livemap`;
+    if (embed.dataset.src !== src) { embed.src = src; embed.dataset.src = src; }
+    sub.textContent = 'jams only';
+    meta.textContent = /waze 403/.test(e.message) ? 'police blocked by Waze' : 'relay: ' + (e.message || 'error');
+    legend.innerHTML = '<span><i style="background:#22c55e"></i>free</span><span><i style="background:#f59e0b"></i>slow</span><span><i style="background:#ef4444"></i>jam</span><span><i style="background:#7f1d1d"></i>standstill</span>';
   }
 }
 
