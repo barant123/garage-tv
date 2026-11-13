@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600&display=swap">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
-<link rel="stylesheet" href="style.css?v=4.1.1">
+<link rel="stylesheet" href="style.css?v=4.2.1">
 </head>
 <body>
 
@@ -29,6 +29,7 @@
     <div class="brand"><span class="brand-mark"><svg><use href="#i-tv"/></svg></span>GARAGE<b>TV</b></div>
     <div class="clock" id="clock"></div>
     <div class="bar-actions">
+      <a class="btn waze" id="waze-btn" data-waze href="https://www.waze.com/live-map/" target="_blank" rel="noopener" title="Open Waze's live map at the car (police, crashes, hazards)"><span class="waze-dot"></span>Waze</a>
       <button class="btn icon" data-go="settings" title="Settings"><svg class="ico"><use href="#i-gear"/></svg></button>
       <button class="btn icon max" data-max title="Maximize"><svg class="ico"><use href="#i-max"/></svg></button>
     </div>
@@ -233,6 +234,7 @@
       <div class="wid-h">
         <span class="sec-title"><span class="sec-name">Traffic</span><span class="sec-sub" id="tr-sub">around the car</span></span>
         <span class="wid-meta" id="tr-meta"></span>
+        <a class="btn ghost small-btn waze-mini" data-waze href="https://www.waze.com/live-map/" target="_blank" rel="noopener" title="Police and hazards in Waze's live map">Police &#8599;</a>
       </div>
       <div class="map">
         <div id="tr-map"></div>
@@ -271,7 +273,7 @@
     </div>
   </header>
   <div id="yt-wrap" class="yt-wrap">
-    <div class="yt-player-box"><div id="yt-player"></div></div>
+    <div class="yt-player-box"><div id="yt-player"></div><canvas id="yt-cv" class="cv"></canvas></div>
     <div class="yt-list" id="yt-list"></div>
   </div>
 </section>
@@ -279,6 +281,7 @@
 <!-- ============ LIVE PLAYER ============ -->
 <section id="view-player" class="view player" hidden>
   <video id="video" playsinline controls></video>
+  <canvas id="cv" class="cv" hidden></canvas>
   <div class="overlay" id="overlay">
     <div class="overlay-top">
       <button class="btn back" id="player-back">&#8592;</button>
@@ -308,9 +311,16 @@
     <label class="field"><span>API key</span><input type="text" id="s-ytkey" placeholder="AIza..." autocomplete="off"></label>
     <label class="field"><span>My playlist (optional, a playlist link you control)</span><input type="text" id="s-ytlist" placeholder="https://www.youtube.com/playlist?list=PL..."></label>
 
-    <h2>Traffic: police and hazards</h2>
-    <p class="muted">The Traffic box shows Waze jams. Police, crashes and hazards would need the relay in <code>tools/waze-relay.js</code>, but as of Nov 2026 Waze blocks every relay (reCAPTCHA), so this field does nothing useful yet. If Waze ever opens the feed again, paste the worker address here and the pins appear.</p>
-    <label class="field"><span>Traffic relay URL (optional)</span><input type="text" id="s-relay" placeholder="https://garage-tv-relay.yourname.workers.dev" autocomplete="off"></label>
+    <h2>Relay (traffic + drive-mode media)</h2>
+    <p class="muted">The Cloudflare Worker in <code>tools/waze-relay.js</code>. Drive mode uses it to fetch live channels that block other sites or are plain http (route <code>/media</code>). It would also add police, crashes and hazards to the Traffic box, but as of Nov 2026 Waze blocks every relay (reCAPTCHA), so traffic falls back to the plain jams map.</p>
+    <label class="field"><span>Relay URL (optional)</span><input type="text" id="s-relay" placeholder="https://garage-tv-relay.yourname.workers.dev" autocomplete="off"></label>
+
+    <h2>Drive mode (passengers)</h2>
+    <p class="muted">The car pauses normal video in Drive. Drive mode plays live TV (and YouTube, with the helper below) through a canvas player that decodes the video itself, so it keeps playing while moving. Auto turns it on in the car browser only. For the passenger: the driver must not watch.</p>
+    <label class="field"><span>Drive mode</span><select id="s-canvas"><option value="auto">Auto (car browser only)</option><option value="on">On (always)</option><option value="off">Off (normal players)</option></select></label>
+    <p class="muted small" id="s-canvas-note"></p>
+    <label class="field"><span>YouTube helper URL (optional, tools/yt-server running on your PC behind https)</span><input type="text" id="s-ytserver" placeholder="https://yt.example.com/your-token" autocomplete="off"></label>
+    <p class="muted small">Without the helper, YouTube uses the normal embedded player, which the car pauses in Drive. Live channels that refuse the page are fetched through the relay above (its <code>/media</code> route), which also makes plain-http channels playable.</p>
 
     <div class="row"><button class="btn primary" id="s-save">Save</button></div>
     <p class="note" id="s-status" hidden></p>
@@ -330,6 +340,7 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/hls.js/1.5.17/hls.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
-<script src="app.js?v=4.1.1"></script>
+<script src="canvas-player.js?v=4.2.1"></script>
+<script src="app.js?v=4.2.1"></script>
 </body>
 </html>

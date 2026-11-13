@@ -6,12 +6,14 @@
      Markets   TradingView cards/chart with editable tickers + US economic calendar (data/calendar.json)
      Side      Weather radar + conditions (NEXRAD via Iowa State Mesonet, Open-Meteo) and live traffic around the car
                (Waze jams, plus police/crashes/hazards through the optional relay in tools/waze-relay.js)
+   Drive mode (4.2): live TV and, with the optional YouTube helper, YouTube play through canvas-player.js, which
+   decodes video itself and draws it on a <canvas>, so the car does not pause it in Drive. Passengers only.
    No build step, no accounts. Preferences live in this browser and in the car link (#p=...). */
 
 (() => {
 'use strict';
 
-const VERSION = '4.1.1';
+const VERSION = '4.2.1';
 const PUBLIC_US = 'https://iptv-org.github.io/iptv/countries/us.m3u';
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
@@ -23,7 +25,7 @@ const store = {
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
   del(k)    { try { localStorage.removeItem(k); } catch {} },
 };
-const PREF_DEFAULTS = { ytKey: '', ytList: '', follows: [], tickers: null, teams: [], loc: null, relay: '' };
+const PREF_DEFAULTS = { ytKey: '', ytList: '', follows: [], tickers: null, teams: [], loc: null, relay: '', canvasMode: 'auto', ytServer: '' };
 const UI_DEFAULTS = { open: {}, tvTab: 'local', ytTab: 'trending', spTab: 'favs', calOpen: false };
 const prefs = { ...PREF_DEFAULTS, ...store.get('prefs', {}) };
 const ui = { ...UI_DEFAULTS, ...store.get('ui', {}) };
@@ -35,7 +37,7 @@ const state = {
   favs: store.get('favs', []),
   hist: store.get('yt_hist', []),          // [{id,title,thumb,channel,dur,t,d,when}]
   publicUS: null, locals: null, teams: null, calendar: null,
-  queue: [], qi: 0, hls: null,
+  queue: [], qi: 0, hls: null, cp: false,
 };
 
 /* ---------- views ---------- */
@@ -472,6 +474,45 @@ async function findChannels() {
 
 /* ---- player (IFrame API) ---- */
 let ytPlayer = null, ytApiReady = null, ytTimer = null, ytPendingSeek = 0, ytCurrent = null;
+// drive mode for YouTube: the canvas player streams from the YouTube helper (tools/yt-server)
+let ytCP = null, ytCanvas = false, ytCPStart = 0, ytPlainOnce = false;
+function ytServerUrl() { return (prefs.ytServer || '').trim().replace(/\/+$/, ''); }
+function ytCanvasOn() { return !ytPlainOnce && canvasActive() && !!ytServerUrl(); }
+function getYtCP() {
+  if (ytCP) return ytCP;
+  ytCP = CanvasPlayer.create($('#yt-cv'), {
+    onPlaying: () => { if (ytCurrent) $('#yt-title').textContent = ytCurrent.title || 'YouTube'; },
+    onEnded: () => { const d = ytCurrent && (ytCurrent.dur || ytCurrent.d) || 0; markHist(ytCurrent, d, d); ytNext(); },
+    onError: m => {
+      if (!ytCurrent) return;
+      const v = ytCurrent;
+      $('#yt-title').innerHTML = `${esc(v.title || 'YouTube')} <span class="muted small">drive mode: ${esc(m)}</span> <button class="btn ghost small-btn" id="yt-plain">normal player</button>`;
+      $('#yt-plain').onclick = () => { ytPlainOnce = true; ytLoad(v, ytCPStart + (ytCP ? ytCP.currentTime : 0)); };
+    },
+  });
+  return ytCP;
+}
+async function ytLoad(v, t = 0) {
+  ytCurrent = v; ytPendingSeek = t || 0;
+  $('#yt-title').textContent = v.title || 'YouTube';
+  const box = $('.yt-player-box');
+  if (ytCanvasOn()) {
+    ytCanvas = true; box.classList.add('cv-mode');
+    try { ytPlayer && ytPlayer.pauseVideo(); } catch {}
+    ytCPStart = Math.floor(t || 0);
+    $('#yt-title').textContent = (v.title || 'YouTube') + ' · preparing…';
+    getYtCP().load(`${ytServerUrl()}/yt/${encodeURIComponent(v.id)}.m3u8?t=${ytCPStart}&h=720`, { maxHeight: 720 });
+    return;
+  }
+  ytCanvas = false; box.classList.remove('cv-mode'); if (ytCP) ytCP.stop();
+  await ensurePlayer();
+  if (ytCurrent !== v) return;
+  ytPlayer.loadVideoById({ videoId: v.id, startSeconds: t || 0 });
+}
+function ytNext() {
+  if (state.queue.length <= 1) return;
+  state.qi = (state.qi + 1) % state.queue.length; ytLoad(state.queue[state.qi], 0); renderQueue();
+}
 function loadYTApi() {
   if (ytApiReady) return ytApiReady;
   ytApiReady = new Promise(res => {
@@ -494,13 +535,11 @@ async function ensurePlayer() {
   return ytPlayer;
 }
 async function openYouTube(opts = {}) {
-  await ensurePlayer();
+  ytPlainOnce = false;
   if (opts.video) {
     state.queue = opts.list || [opts.video]; state.qi = Math.max(0, state.queue.findIndex(v => v.id === opts.video.id));
-    ytCurrent = opts.video; ytPendingSeek = opts.t || 0;
-    $('#yt-title').textContent = opts.video.title || 'YouTube';
-    ytPlayer.loadVideoById({ videoId: opts.video.id, startSeconds: opts.t || 0 });
-  }
+    ytLoad(opts.video, opts.t || 0); // synchronous up to the canvas start, so audio is unlocked by the tap
+  } else if (!ytCanvasOn()) await ensurePlayer();
   renderQueue();
   clearInterval(ytTimer); ytTimer = setInterval(ytSave, 5000);
 }
@@ -510,11 +549,12 @@ function renderQueue() {
     const b = document.createElement('button');
     b.className = 'yt-item' + (ytCurrent && v.id === ytCurrent.id ? ' active' : '');
     b.innerHTML = `<img src="${esc(v.thumb)}" alt="" loading="lazy"><span>${esc(v.title)}</span>`;
-    b.addEventListener('click', () => { ytSave(); state.qi = i; ytCurrent = v; ytPendingSeek = 0; $('#yt-title').textContent = v.title; ytPlayer.loadVideoById(v.id); renderQueue(); });
+    b.addEventListener('click', () => { ytSave(); state.qi = i; ytLoad(v, 0); renderQueue(); });
     box.appendChild(b);
   });
 }
 function ytState(e) {
+  if (ytCanvas) return;
   const s = e.data;
   if (s === YT.PlayerState.PLAYING) {
     if (ytPendingSeek > 3) { ytPlayer.seekTo(ytPendingSeek, true); ytPendingSeek = 0; }
@@ -525,7 +565,7 @@ function ytState(e) {
   if (s === YT.PlayerState.PAUSED) ytSave();
   if (s === YT.PlayerState.ENDED) {
     markHist(ytCurrent, ytPlayer.getDuration() || 0, ytPlayer.getDuration() || 0);
-    if (state.queue.length > 1) { state.qi = (state.qi + 1) % state.queue.length; const v = state.queue[state.qi]; ytCurrent = v; $('#yt-title').textContent = v.title; ytPlayer.loadVideoById(v.id); renderQueue(); }
+    ytNext();
   }
 }
 function ytError(e) {
@@ -543,15 +583,19 @@ function markHist(v, t, d) {
   delete ytCache.history;
 }
 function ytSave() {
+  if (ytCanvas) {
+    if (ytCP && ytCP.playing && ytCurrent) markHist(ytCurrent, ytCPStart + ytCP.currentTime, ytCurrent.dur || ytCurrent.d || 0);
+    return;
+  }
   if (!ytPlayer || !ytPlayer.getPlayerState || !ytCurrent) return;
   const st = ytPlayer.getPlayerState();
   if (st !== YT.PlayerState.PLAYING && st !== YT.PlayerState.PAUSED) return;
   const d = ytPlayer.getVideoData() || {}; if (!d.video_id || d.video_id !== ytCurrent.id) return;
   markHist(ytCurrent, ytPlayer.getCurrentTime() || 0, ytPlayer.getDuration() || 0);
 }
-function ytLeave() { ytSave(); clearInterval(ytTimer); try { ytPlayer && ytPlayer.pauseVideo(); } catch {} renderResume(); }
+function ytLeave() { ytSave(); clearInterval(ytTimer); try { ytPlayer && ytPlayer.pauseVideo(); } catch {} if (ytCP) ytCP.stop(); renderResume(); }
 $('#yt-fs').addEventListener('click', () => {
-  const box = $('.yt-player-box'); const iframe = box.querySelector('iframe');
+  const box = $('.yt-player-box'); const iframe = box.classList.contains('cv-mode') ? null : box.querySelector('iframe');
   try { (iframe && iframe.requestFullscreen ? iframe : box).requestFullscreen().catch(() => toggleMax()); } catch { toggleMax(); }
 });
 function renderResume() {
@@ -745,8 +789,31 @@ let overlayTimer = null;
 function showOverlay() {
   $('#overlay').classList.remove('hide');
   clearTimeout(overlayTimer);
-  overlayTimer = setTimeout(() => { if (!video.paused) $('#overlay').classList.add('hide'); }, 4000);
+  overlayTimer = setTimeout(() => { if (playingNow()) $('#overlay').classList.add('hide'); }, 4000);
 }
+
+/* ---- drive mode: canvas player (canvas-player.js) instead of <video> ---- */
+let liveCP = null, liveCh = null, forcePlain = false;
+function canvasActive() {
+  if (!window.CanvasPlayer || !CanvasPlayer.supported()) return false;
+  if (prefs.canvasMode === 'on') return true;
+  if (prefs.canvasMode === 'off') return false;
+  return CanvasPlayer.isCarBrowser();
+}
+function playingNow() { return state.cp ? !!(liveCP && liveCP.playing) : !video.paused; }
+function getLiveCP() {
+  if (liveCP) return liveCP;
+  liveCP = CanvasPlayer.create($('#cv'), {
+    onPlaying: () => { msg(''); showOverlay(); },
+    onError: m => { if (liveCh) failed(liveCh, m, true); },
+    onEnded: () => { if (state.queue.length > 1) step(1); else msg('<div>Stream ended</div>'); },
+    onInfo: m => { if (m.buffer === 'buffering') showOverlay(); },
+  });
+  return liveCP;
+}
+function surface(kind) { video.hidden = kind !== 'video'; $('#cv').hidden = kind !== 'canvas'; }
+// unlock Web Audio on the first tap so drive-mode sound may start later without one
+document.addEventListener('pointerdown', () => { if (window.CanvasPlayer && canvasActive()) CanvasPlayer.unlockAudio(); }, { passive: true });
 function msg(html) { const m = $('#player-msg'); if (!html) { m.hidden = true; return; } m.innerHTML = html; m.hidden = false; showOverlay(); }
 function play(ch, queue) {
   state.queue = queue || [ch];
@@ -755,11 +822,20 @@ function play(ch, queue) {
   startStream(ch);
   try { const p = document.documentElement.requestFullscreen && document.documentElement.requestFullscreen(); if (p && p.catch) p.catch(() => {}); } catch {}
 }
-function startStream(ch) {
+function startStream(ch, opts = {}) {
   stopHls();
+  forcePlain = !!opts.plain;
   $('#player-title').textContent = ch.name;
   $('#player-fav').innerHTML = isFav(ch) ? '&#9733;' : '&#9734;';
   msg(''); showOverlay();
+  const isHlsUrl = /\.m3u8(\?|$)/i.test(ch.url) || /\/live\//i.test(ch.url) || /\.ts(\?|$)/i.test(ch.url);
+  if (isHlsUrl && !forcePlain && canvasActive() && (!mixedContent(ch.url) || relayUrl())) {
+    // drive mode: the canvas player fetches through the relay when the source blocks the page or is plain http
+    state.cp = true; liveCh = ch; surface('canvas');
+    getLiveCP().load(ch.url, { relay: relayUrl(), maxHeight: 720 });
+    return;
+  }
+  surface('video');
   if (mixedContent(ch.url)) {
     msg(`<div>This channel uses plain http and the page is https, so the browser blocks it.</div><button class="btn" id="msg-next">Next channel</button>`);
     $('#msg-next').onclick = () => step(1); return;
@@ -779,16 +855,22 @@ function startStream(ch) {
     });
   } else { video.src = ch.url; video.play().catch(() => {}); }
 }
-function failed(ch, why) {
+function failed(ch, why, canvas) {
   stopHls();
-  msg(`<div>Stream failed: ${esc(ch.name)}</div><div class="muted small">${esc(why || '')}. Usually the source is down, geo-blocked, or blocks browsers.</div>
-       <button class="btn" id="msg-retry">Retry</button><button class="btn primary" id="msg-next">Next channel</button>`);
+  msg(`<div>Stream failed: ${esc(ch.name)}</div><div class="muted small">${esc(why || '')}. ${canvas ? 'Drive-mode player. ' : ''}Usually the source is down, geo-blocked, or blocks browsers.</div>
+       <button class="btn" id="msg-retry">Retry</button>${canvas ? '<button class="btn" id="msg-plain">Normal player (parked)</button>' : ''}<button class="btn primary" id="msg-next">Next channel</button>`);
   $('#msg-retry').onclick = () => startStream(ch);
   $('#msg-next').onclick = () => step(1);
+  if (canvas) $('#msg-plain').onclick = () => startStream(ch, { plain: true });
 }
-video.addEventListener('error', () => { if (!state.hls) failed(state.queue[state.qi], 'Browser could not play this format'); });
+video.addEventListener('error', () => { if (!state.hls && !state.cp && video.getAttribute('src')) failed(state.queue[state.qi], 'Browser could not play this format'); });
 function step(d) { if (!state.queue.length) return; state.qi = (state.qi + d + state.queue.length) % state.queue.length; startStream(state.queue[state.qi]); }
-function stopHls() { if (state.hls) { try { state.hls.destroy(); } catch {} state.hls = null; } video.removeAttribute('src'); try { video.load(); } catch {} }
+function stopHls() {
+  if (state.hls) { try { state.hls.destroy(); } catch {} state.hls = null; }
+  if (liveCP) liveCP.stop();
+  state.cp = false; liveCh = null;
+  video.removeAttribute('src'); try { video.load(); } catch {}
+}
 function stopPlayer() { stopHls(); if (document.fullscreenElement) { try { document.exitFullscreen().catch(() => {}); } catch {} } }
 $('#player-back').addEventListener('click', () => history.back());
 $('#player-prev').addEventListener('click', () => step(-1));
@@ -829,8 +911,20 @@ async function ipGeo() {
 function setGeo(g) {
   const moved = !geoOK(geo) || km(geo, g) > 0.5;
   geo = { ...g, at: Date.now() }; store.set('geo_auto', geo);
+  updateWazeLinks();
   return moved;
 }
+/* Waze button: just a link to Waze's own live map (police, crashes, hazards), centered on the car.
+   Nothing is fetched from Waze here. ll=lat,lon is the form Waze's own waze.com/ul links redirect to; Waze opens
+   it as a dropped pin at the car (street zoom, directions panel open; zoom= is ignored, tap minus to see the area). */
+const WAZE_LIVE = 'https://www.waze.com/live-map/';
+function wazeUrl() {
+  if (!geoOK(geo) || geo.src === 'default') return WAZE_LIVE;
+  return `${WAZE_LIVE}?ll=${geo.lat.toFixed(5)},${geo.lon.toFixed(5)}`;
+}
+function updateWazeLinks() { const u = wazeUrl(); $$('[data-waze]').forEach(a => { a.href = u; }); }
+document.addEventListener('pointerdown', e => { if (e.target.closest('[data-waze]')) updateWazeLinks(); }, { passive: true });
+updateWazeLinks();
 let gpsAsked = false;
 async function locate() {
   // Draw right away from the rough (IP) location; the browser's precise fix arrives in the background.
@@ -1064,11 +1158,18 @@ function carLink() {
 }
 function renderSettings() {
   $('#s-ytkey').value = prefs.ytKey || ''; $('#s-ytlist').value = prefs.ytList || ''; $('#s-relay').value = prefs.relay || '';
-  $('#s-carlink').value = carLink(); $('#s-version').textContent = `Garage TV ${VERSION}`; status('');
+  $('#s-canvas').value = prefs.canvasMode || 'auto'; $('#s-ytserver').value = prefs.ytServer || '';
+  const cp = window.CanvasPlayer;
+  $('#s-canvas-note').textContent = !cp ? 'canvas-player.js did not load.' :
+    `This browser: ${cp.supported() ? 'can run drive mode' : 'cannot run drive mode (needs WebCodecs over https)'}` +
+    `${cp.isCarBrowser() ? ', looks like the car' : ', does not look like the car'}. Drive mode is ${canvasActive() ? 'ON' : 'off'} here.`;
+  $('#s-carlink').value = carLink(); $('#s-version').textContent = `Garage TV ${VERSION} · canvas player ${cp ? cp.version : '-'}`; status('');
 }
 $('#s-save').addEventListener('click', () => {
   prefs.ytKey = $('#s-ytkey').value.trim(); prefs.ytList = ytListId($('#s-ytlist').value);
-  prefs.relay = $('#s-relay').value.trim().replace(/\/+$/, ''); trAt = 0; savePrefs();
+  prefs.relay = $('#s-relay').value.trim().replace(/\/+$/, ''); trAt = 0;
+  prefs.canvasMode = $('#s-canvas').value || 'auto'; prefs.ytServer = $('#s-ytserver').value.trim().replace(/\/+$/, '');
+  savePrefs(); renderSettings();
   Object.keys(ytCache).forEach(k => delete ytCache[k]);
   history.replaceState(history.state, '', carLink());
   status('Saved. Bookmark the car link below so the car never needs this typed.', true);

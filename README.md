@@ -17,18 +17,61 @@ No accounts, no server. Files:
 | File | What it is |
 |---|---|
 | `index.html`, `style.css`, `app.js` | the page |
+| `canvas-player.js` | drive-mode player: decodes HLS itself and draws on a canvas (no `<video>`) |
 | `sources.json` | default Live TV channels (with logos), default tickers, optional YouTube defaults |
 | `data/calendar.json` | US economic calendar, refreshed by the GitHub Action |
 | `data/locals.json` | US local stations with an https stream, tagged by city and state (iptv-org) |
 | `data/teams.json` | team lists per league for the favorites picker (ESPN) |
 | `tools/build_data.py` | builds the three data files |
-| `tools/waze-relay.js` | optional Cloudflare Worker that relays Waze alerts (police) to the page; setup steps inside |
+| `tools/waze-relay.js` | optional Cloudflare Worker: Waze alerts (police) and the `/media` stream relay for drive mode; setup steps inside |
+| `tools/relay_hosts.py` | refreshes the relay's list of allowed stream hosts |
+| `tools/yt-server/` | optional YouTube helper for drive mode, runs on your PC (README inside) |
 | `.github/workflows/data.yml` | runs the builder every 4 hours and commits the result |
 
 ## Use it in the car
 
 Park, open the browser, go to the site URL, bookmark it. Tap a section header
-to open or close it. Video only plays while parked; that is the car, not the page.
+to open or close it. With drive mode (below), live TV keeps playing for passengers
+while the car moves.
+
+## Drive mode (passengers)
+
+The Tesla browser pauses every `<video>` element as soon as the car leaves Park.
+Drive mode never uses one: `canvas-player.js` downloads the HLS playlist and the
+MPEG-TS segments itself, unpacks them, decodes the H.264 video with WebCodecs in a
+background worker and draws each frame on a `<canvas>`. Sound is decoded separately
+and played through Web Audio, which the car leaves alone. Frames are timed against
+the sound clock, so picture and sound stay in sync.
+
+Settings, then **Drive mode**:
+
+| Choice | What happens |
+|---|---|
+| Auto (default) | Drive mode in the car browser only (it reports itself as desktop Linux Chrome); normal players everywhere else |
+| On | Drive mode in every browser that supports it (handy for testing on a PC with Chrome or Edge) |
+| Off | Normal players (hls.js `<video>` and the YouTube embed) |
+
+The Settings page tells you whether the current browser can run it and whether it is on.
+
+What plays in drive mode:
+
+- **Live TV**: HLS channels with H.264 video and AAC or MP3 audio, including AES-128
+  encrypted ones. Up to 720p is picked to keep the car smooth. Channels that block other
+  websites (CORS), or that are plain `http://`, play through the relay's `/media` route
+  once the relay URL is set (Settings, Relay). HEVC (H.265), fMP4/CMAF-only, SAMPLE-AES or DRM channels
+  fail with a reason and a **Normal player (parked)** button. AC-3 audio plays without sound.
+- **YouTube**: needs the YouTube helper (`tools/yt-server`) running on your PC, reachable over
+  https. Put its URL in Settings, **YouTube helper URL**. Without it, YouTube uses the normal
+  embed, which the car pauses in Drive. Resume and history work in both.
+
+Relay setup: deploy or update the Worker from `tools/waze-relay.js` (steps at the top of
+that file) and paste its URL in Settings. To allow another channel host, add its domain to
+`MEDIA_HOSTS` in the Worker (or run `python tools/relay_hosts.py`, which rebuilds the
+list from the iptv-org US index, `sources.json` and `data/locals.json`) and paste the Worker again.
+
+Limits: no seeking inside a stream, needs WebCodecs (newer Tesla software; older cars
+fall back to the normal players), and Tesla could block this in a future update. It is
+for passengers: the driver must not watch.
 
 ## Preferences and the car link
 
@@ -48,7 +91,8 @@ only have city-council channels.
 ## YouTube
 
 youtube.com itself cannot be shown inside another page, so Garage TV uses the
-YouTube Data API for browsing and the embedded player for playback. That needs
+YouTube Data API for browsing and the embedded player for playback (or, in drive
+mode with the helper, the canvas player). That needs
 a free API key, one time:
 
 1. On a PC open console.cloud.google.com, create a project, enable
@@ -67,6 +111,8 @@ Both follow the car. The page asks the browser for location (allow it once in th
 car); if refused, it uses the connection's rough location. Weather numbers come from
 Open-Meteo with the US National Weather Service as a fallback, radar tiles from the
 Iowa State Mesonet NEXRAD composite. No keys.
+
+The blue **Waze** button in the top bar (and "Police ↗" on the Traffic box) opens Waze's own live map centered on the car in a new tab, so police, crash and hazard reports are one tap away.
 
 Traffic without a relay shows the plain Waze map (jams only; it cannot draw reports).
 Police, crashes, hazards and closures need Waze's live-map feed, which refuses

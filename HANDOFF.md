@@ -1,6 +1,6 @@
 # Garage TV — project handoff
 
-Version 4.1.1 (2026-11-13). Static site, no build step, no framework.
+Version 4.2.1 (2026-11-13). Static site, no build step, no framework.
 
 | Item | Where |
 |---|---|
@@ -15,6 +15,7 @@ Version 4.1.1 (2026-11-13). Static site, no build step, no framework.
 
 | File | Purpose |
 |---|---|
+| `canvas-player.js` | Drive-mode player (`window.CanvasPlayer`): HLS/TS fetch, TS demux, WebCodecs H.264 in a Worker onto OffscreenCanvas, AAC/MP3 via Web Audio as the master clock, setTimeout pacing. No `<video>`. |
 | `index.html` | All views in one page: home, public TV list, YouTube player, live player, settings. SVG icon symbols at the top. |
 | `style.css` | Theme tokens, sections, cards, side widgets, Leaflet overrides. |
 | `app.js` | Everything, one IIFE. Section map below. |
@@ -23,7 +24,9 @@ Version 4.1.1 (2026-11-13). Static site, no build step, no framework.
 | `data/locals.json` | Local stations by city/state from iptv-org. Rebuilt by the Action. |
 | `data/teams.json` | Team lists per league from ESPN for the favorites picker. Rebuilt by the Action. |
 | `tools/build_data.py` | Builds the three data files. `build_calendar()` L44, `build_locals()` L70, `build_teams()` L124. |
-| `tools/waze-relay.js` | Cloudflare Worker: `/` health check, `/waze?top&bottom&left&right` → `{at, alerts[], jams[]}` with CORS for barant123.github.io and localhost:8080. |
+| `tools/relay_hosts.py` | Rewrites `MEDIA_HOSTS` (between `// HOSTS:BEGIN/END`) in the Worker from iptv-org US + sources.json + locals.json. |
+| `tools/yt-server/` | Optional Python (aiohttp + yt-dlp + ffmpeg) helper: `/yt/<id>.m3u8?t=&h=` → H.264/AAC HLS for drive-mode YouTube. Runs on Brandon's PC behind an https tunnel. |
+| `tools/waze-relay.js` | Cloudflare Worker: `/media?u=` stream relay (Range, playlist URI rewrite, host allowlist, optional `MEDIA_SECRET` signing), `/` health check, `/waze?top&bottom&left&right` → `{at, alerts[], jams[]}` with CORS for barant123.github.io and localhost:8080. |
 | `.github/workflows/data.yml` | "Refresh data": cron `17 */4 * * *` + manual. Runs the builder and commits `data/` as garage-tv-bot. |
 | `README.md` | User-facing docs. |
 | `mock-v4.html`, `mock-relay/` | Local design mockup and fake relay response. Git-ignored, not deployed. |
@@ -116,3 +119,14 @@ python -m http.server 8080 --bind 127.0.0.1 --directory garage-tv
 ```
 
 Open http://localhost:8080/. The relay allows that origin. `mock-relay/waze` serves a fake relay answer if `prefs.relay` is set to `http://localhost:8080/mock-relay`.
+
+## Drive mode (4.2.0)
+
+- `prefs.canvasMode` `auto|on|off` and `prefs.ytServer` (both in the car link). `canvasActive()` in app.js decides: CanvasPlayer.supported() and (on, or auto + `isCarBrowser()`).
+- Live: `startStream(ch, {plain})` routes HLS/TS URLs to `getLiveCP()` (canvas `#cv`) and otherwise to hls.js on `#video`; `stopHls()` stops both; `failed(ch, why, canvas)` adds a "Normal player (parked)" button.
+- YouTube: `ytLoad(v, t)` picks canvas (`#yt-cv`, `.yt-player-box.cv-mode`) when `ytCanvasOn()`, else the IFrame player. `ytNext()` handles autoplay for both; `ytSave()` records progress from `ytCPStart + ytCP.currentTime`.
+- A canvas can transfer control to a worker only once, so CanvasPlayer swaps in a clone of the canvas on every `load()`; always look it up by id.
+
+## Waze button (4.2.1)
+
+- `#waze-btn` in the home top bar and a "Police ↗" link in the Traffic widget header (both `[data-waze]`) are plain links to `https://www.waze.com/live-map/?ll=<lat>,<lon>` (Waze turns it into a dropped pin at street zoom; `zoom=` is ignored; no `ll` until a real GPS/IP fix exists), `target=_blank`. `wazeUrl()` / `updateWazeLinks()` in app.js refresh them from `geo` on every `setGeo()` and on tap. Nothing is fetched from Waze.
