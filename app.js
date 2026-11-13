@@ -11,7 +11,7 @@
 (() => {
 'use strict';
 
-const VERSION = '4.0.4';
+const VERSION = '4.0.5';
 const PUBLIC_US = 'https://iptv-org.github.io/iptv/countries/us.m3u';
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];

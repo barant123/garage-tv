@@ -273,7 +273,7 @@ select option { background: #0f141b; color: var(--text); }
 .home-grid { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 18px; align-items: start; }
 .home-main { min-width: 0; }
 .home-side { display: flex; flex-direction: column; gap: 12px; margin-top: 12px; position: sticky; top: 90px; }
-@media (max-width: 1399px) {
+@media (max-width: 1099px) {
   .home-grid { grid-template-columns: 1fr; }
   .home-side { position: static; display: grid; grid-template-columns: 1fr 1fr; align-items: start; }
   .map { aspect-ratio: 16 / 10; }
