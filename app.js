@@ -11,7 +11,7 @@
 (() => {
 'use strict';
 
-const VERSION = '4.1.0';
+const VERSION = '4.1.1';
 const PUBLIC_US = 'https://iptv-org.github.io/iptv/countries/us.m3u';
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
@@ -826,13 +826,31 @@ async function ipGeo() {
   if (d.country_code === 'US') store.set('loc_auto', { at: Date.now(), loc: { state: d.region_code, city: d.city, auto: true, lat: d.latitude, lon: d.longitude } });
   return { lat: d.latitude, lon: d.longitude, src: 'ip' };
 }
-async function locate() {
-  let g = null;
-  try { g = await browserGeo(); } catch {}
-  if (!g) { try { g = await ipGeo(); } catch {} }
-  if (!g) g = geoOK(geo) ? geo : DEFAULT_GEO;
+function setGeo(g) {
   const moved = !geoOK(geo) || km(geo, g) > 0.5;
   geo = { ...g, at: Date.now() }; store.set('geo_auto', geo);
+  return moved;
+}
+let gpsAsked = false;
+async function locate() {
+  // Draw right away from the rough (IP) location; the browser's precise fix arrives in the background.
+  // A pending location prompt would otherwise hold the whole column blank until it is answered.
+  let moved = false;
+  const fresh = geoOK(geo) && geo.src === 'gps' && Date.now() - (geo.at || 0) < 10 * 60e3;
+  if (!fresh) {
+    let g = null;
+    try { g = await ipGeo(); } catch {}
+    if (!g && !geoOK(geo)) g = DEFAULT_GEO;
+    if (g && (!geoOK(geo) || geo.src !== 'gps')) moved = setGeo(g);
+  }
+  if (!gpsAsked || Date.now() - (geo.at || 0) > 5 * 60e3) {
+    gpsAsked = true;
+    browserGeo().then(p => {
+      if (!setGeo(p)) return;
+      recenter(maps.wx); recenter(maps.tr); wxAt = 0; trAt = 0; trBlocked = 0;
+      renderWeather(true); renderTraffic(true);
+    }).catch(() => {});
+  }
   return moved;
 }
 function geoName() {
