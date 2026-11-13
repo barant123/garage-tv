@@ -9,7 +9,7 @@
 (() => {
 'use strict';
 
-const VERSION = '3.0.0';
+const VERSION = '3.0.1';
 const PUBLIC_US = 'https://iptv-org.github.io/iptv/countries/us.m3u';
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
@@ -187,7 +187,7 @@ setInterval(tickClock, 15000); tickClock();
 function renderHome() {
   renderResume();
   $('#tv-meta').textContent = (prefs.loc ? locLabel(prefs.loc) + ' · ' : '') + `${state.sources.tv.length} channels`;
-  $('#yt-meta').textContent = prefs.ytKey ? (prefs.follows.length ? `${prefs.follows.length} channels followed` : 'search · trending') : 'needs API key';
+  $('#yt-meta').textContent = ytMetaText();
   $('#sp-meta').textContent = prefs.teams.length ? prefs.teams.map(t => t.abbr).join(' · ') : 'pick your teams';
   $('#mk-meta').textContent = tickers().map(m => m.name.split(' ')[0]).join(' · ');
 }
@@ -358,8 +358,16 @@ async function ytPlaylist() {
   return ids.map(id => ({ id, title: titles[id] || 'Video', channel: '', thumb: `https://i.ytimg.com/vi/${id}/mqdefault.jpg`, dur: 0, views: 0, published: '' }));
 }
 
+function ytMetaText() {
+  if (!prefs.ytKey) return 'needs API key';
+  const p = $(`#yt-pills [data-yttab="${ui.ytTab}"]`);
+  const tab = ui.ytTab === 'search' ? 'search' : (p ? p.textContent.trim().toLowerCase() : 'trending');
+  const n = prefs.follows.length;
+  return tab + (n ? ` · ${n} channel${n === 1 ? '' : 's'} followed` : '');
+}
 async function renderYTTab(force) {
   pills($('#yt-pills'), 'yttab', ui.ytTab);
+  $('#yt-meta').textContent = ytMetaText();
   const hint = $('#yt-hint'), grid = $('#yt-cards');
   const needsKey = !prefs.ytKey && !['history', 'playlist'].includes(ui.ytTab);
   $('#yt-setup').hidden = !needsKey;
