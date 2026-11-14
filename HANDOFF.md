@@ -1,6 +1,6 @@
 # Garage TV — project handoff
 
-Version 4.2.1 (2026-11-13). Static site, no build step, no framework.
+Version 4.2.2 (2026-11-13). Static site, no build step, no framework.
 
 | Item | Where |
 |---|---|
@@ -130,3 +130,22 @@ Open http://localhost:8080/. The relay allows that origin. `mock-relay/waze` ser
 ## Waze button (4.2.1)
 
 - `#waze-btn` in the home top bar and a "Police ↗" link in the Traffic widget header (both `[data-waze]`) are plain links to `https://www.waze.com/live-map/?ll=<lat>,<lon>` (Waze turns it into a dropped pin at street zoom; `zoom=` is ignored; no `ll` until a real GPS/IP fix exists), `target=_blank`. `wazeUrl()` / `updateWazeLinks()` in app.js refresh them from `geo` on every `setGeo()` and on tap. Nothing is fetched from Waze.
+
+## 4.2.2: drive-mode audio fix and player controls
+- **Audio cutting out (YouTube in drive mode).** canvas-player.js used to hand every decoded 21 ms AAC frame to
+  Web Audio as soon as it was decoded. With the YouTube helper the player buffers ~30 s ahead, so 1000-1500
+  AudioBufferSourceNodes sat scheduled at once. Chrome processes every pending node on each render quantum
+  (measured: 1500 pending nodes cost ~200x more audio-thread time than 20), which overloads the audio thread on
+  the car computer, so sound drops while the picture keeps going. Now decoded audio waits in a queue and is
+  scheduled just in time (1.5 s ahead) in ~0.5 s merged buffers: 3-4 live nodes at any moment.
+- Also: the AudioContext resumes itself if the browser suspends it (unless the user paused); AudioData in a
+  non-float format is converted by hand when copyTo cannot convert; during a network stall the wall-clock
+  fallback holds instead of running past frames that have not arrived.
+- **Controls.** YouTube (canvas mode): play/pause, -10 s, +10 s, seek bar with time / duration, next video;
+  big touch targets, auto-hide after 4 s, tap to show. Keys: space/k, left/j, right/l. Seeks inside what the
+  helper has prepared happen in place (`p.seek()`); farther seeks restart the helper at `?t=`.
+  Live TV (canvas mode): play/pause in the overlay; resuming after more than 30 s jumps back to live.
+- **Quality.** Helper streams start at 720p; two real stalls within 2 minutes step down to 480p, then 360p,
+  for the rest of the session (the PC's upload over Tailscale Funnel measured ~4-5 Mbit/s).
+- CanvasPlayer 1.1.0 API: `p.pause()`, `p.resume()`, `p.paused`, `p.seek(sec)`, `p.seekable`, `p.live`,
+  `p.complete`, `p.audioInfo()`. `p.currentTime` is now media time from the start of the stream.

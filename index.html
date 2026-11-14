@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600&display=swap">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
-<link rel="stylesheet" href="style.css?v=4.2.1">
+<link rel="stylesheet" href="style.css?v=4.2.2">
 </head>
 <body>
 
@@ -273,7 +273,22 @@
     </div>
   </header>
   <div id="yt-wrap" class="yt-wrap">
-    <div class="yt-player-box"><div id="yt-player"></div><canvas id="yt-cv" class="cv"></canvas></div>
+    <div class="yt-player-box"><div id="yt-player"></div><canvas id="yt-cv" class="cv"></canvas>
+      <!-- drive-mode controls for the canvas player (the YouTube embed has its own) -->
+      <div class="cv-ctl" id="yt-ctl">
+        <div class="cv-ctl-mid">
+          <button class="btn cbtn" data-yc="back" title="Back 10 seconds"><svg class="ci" viewBox="0 0 24 24"><path d="M12 5V1L7 6l5 5V7a6 6 0 1 1-6 6H4a8 8 0 1 0 8-8z"/></svg><span class="cn">10</span></button>
+          <button class="btn cbtn big" data-yc="play" title="Play / pause"><svg class="ci" viewBox="0 0 24 24"><path class="i-pause" d="M6 4h4v16H6zM14 4h4v16h-4z"/><path class="i-play" d="M7 4l13 8-13 8z"/></svg></button>
+          <button class="btn cbtn" data-yc="fwd" title="Forward 10 seconds"><svg class="ci" viewBox="0 0 24 24"><path d="M12 5V1l5 5-5 5V7a6 6 0 1 0 6 6h2a8 8 0 1 1-8-8z"/></svg><span class="cn">10</span></button>
+        </div>
+        <div class="cv-ctl-bar">
+          <span class="cv-time" id="yt-time">0:00</span>
+          <input type="range" class="cv-seek" id="yt-seek" min="0" max="1" step="1" value="0" aria-label="Seek">
+          <span class="cv-time" id="yt-dur">--:--</span>
+          <button class="btn cbtn sm" data-yc="next" title="Next video"><svg class="ci" viewBox="0 0 24 24"><path d="M5 5l10 7-10 7zM16 5h3v14h-3z"/></svg></button>
+        </div>
+      </div>
+    </div>
     <div class="yt-list" id="yt-list"></div>
   </div>
 </section>
@@ -291,6 +306,7 @@
     </div>
     <div class="overlay-mid">
       <button class="btn huge" id="player-prev">&#8249;</button>
+      <button class="btn cbtn big" id="player-pp" title="Play / pause" hidden><svg class="ci" viewBox="0 0 24 24"><path class="i-pause" d="M6 4h4v16H6zM14 4h4v16h-4z"/><path class="i-play" d="M7 4l13 8-13 8z"/></svg></button>
       <button class="btn huge" id="player-next">&#8250;</button>
     </div>
     <div class="overlay-msg" id="player-msg" hidden></div>
@@ -340,7 +356,7 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/hls.js/1.5.17/hls.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
-<script src="canvas-player.js?v=4.2.1"></script>
-<script src="app.js?v=4.2.1"></script>
+<script src="canvas-player.js?v=4.2.2"></script>
+<script src="app.js?v=4.2.2"></script>
 </body>
 </html>

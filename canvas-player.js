@@ -17,7 +17,8 @@
      p.playing, p.currentTime        state for the page (currentTime = seconds of media played)
 
    Limits: H.264 video only (no HEVC), AAC or MP3 audio (AC-3 plays silent), TS segments only
-   (no fMP4 / CMAF). AES-128 encrypted HLS works; SAMPLE-AES and DRM do not. No seeking.
+   (no fMP4 / CMAF). AES-128 encrypted HLS works; SAMPLE-AES and DRM do not.
+   p.pause() / p.resume(); p.seek(sec) inside a finished or growing (EVENT) playlist (p.seekable).
    Original code written for Garage TV. */
 
 (function (global) {
@@ -42,6 +43,8 @@ function workerMain() {
     if (m.t === 'start') start(m);
     else if (m.t === 'clock' && S) { S.aClock = m.m; S.aEnd = m.end; S.aAt = m.at; }
     else if (m.t === 'audioFailed' && S) { S.hasAudio = false; }
+    else if (m.t === 'pause' && S) setPaused(!!m.on);
+    else if (m.t === 'seek' && S && !S.progressive && !S.live) { S.gen = m.gen; S.seekTo = Math.max(0, +m.to || 0); S.seekDrop = S.seekTo; if (S.paused) S.pauseC = S.seekTo; }
     else if (m.t === 'stop') { stop(); self.close(); }
   };
 
@@ -57,6 +60,7 @@ function workerMain() {
       hasAudio: false, aClock: null, aEnd: null, aAt: 0, frozenSince: null, wall0: null, wallT0: 0,
       firstFrameAt: 0, started: false, preview: false, eos: false, frames: 0, dropped: 0, live: true,
       startedAt: now(), statAt: now(), statFrames: 0, lastBufState: '',
+      paused: false, pauseC: 0, gen: 0, seekTo: null, seekDrop: null, avail: 0, plEnded: false,
     };
     if (S.canvas) { try { S.ctx = S.canvas.getContext('2d', { alpha: false }); } catch (_) { S.ctx = null; } }
     if (typeof VideoDecoder !== 'function') { fatal('VideoDecoder is not available in this browser'); return; }
@@ -77,6 +81,29 @@ function workerMain() {
   }
 
   function fatal(msg) { if (!S || S.stopped) return; post({ t: 'error', msg }); const s = S; stop(); void s; }
+
+  // Pause freezes the presentation clock; the loader keeps filling the buffer up to its limit.
+  function setPaused(on) {
+    if (on === S.paused) return;
+    if (on) { const c = clock(); S.pauseC = c == null ? (S.lastShown || 0) : c; S.paused = true; return; }
+    S.paused = false; S.frozenSince = null;
+    if (S.aClock != null) { S.aClock = S.pauseC; S.aAt = now(); }
+    if (S.wall0 != null) { S.wall0 = now(); S.wallT0 = S.pauseC; }
+    if (S.wc != null) S.wc = S.pauseC;
+  }
+  // Seek inside the playlist we already have: drop everything queued and restart from the segment
+  // that holds the target time. Frames and audio before the target are decoded but not shown.
+  function resetForSeek(to) {
+    S.dmx.pes = {}; S.pendV = null; S.aq = []; S.vq = [];
+    for (const f of S.fq) { try { f.close(); } catch (_) {} }
+    S.fq = [];
+    try { if (S.dec && S.dec.state !== 'closed') S.dec.close(); } catch (_) {}
+    S.dec = null; S.cfgDirty = true; S.needKey = true;
+    S.lastEnd = null; S.lastVraw = null; S.discPending = false; S.seekDrop = to;
+    S.aClock = null; S.aEnd = null; S.wall0 = null; S.wc = null; S.frozenSince = null; S.firstFrameAt = 0;
+    S.preview = false; S.eos = false; S.lastBufState = '';
+    if (S.paused) S.pauseC = to;
+  }
 
   /* ---------------- network ---------------- */
   const isRelayed = u => S.relay && u.startsWith(S.relay + '/');
@@ -221,19 +248,32 @@ function workerMain() {
       throw e;
     }
     S.live = !pl.ended && pl.type !== 'EVENT';
+    post({ t: 'info', live: S.live });
     const maxAhead = S.live ? 20 : 30;
+    const noteAvail = () => { if (!S.live) { S.avail = pl.segs.reduce((n, s) => n + s.dur, 0); S.plEnded = pl.ended; } };
+    noteAvail();
     let next = S.live && pl.segs.length ? pl.segs[Math.max(0, pl.segs.length - 3)].sn : pl.seq;
     let fails = 0;
     while (!me.stopped) {
+      if (S.seekTo != null && !S.live && pl.segs.length) {
+        const to = S.seekTo; S.seekTo = null;
+        let acc = 0, target = pl.segs[0];
+        for (const s of pl.segs) { target = s; if (acc + s.dur > to) break; acc += s.dur; }
+        next = target.sn; resetForSeek(to);
+        continue;
+      }
       const seg = pl.segs.find(s => s.sn === next);
       if (seg) {
-        while (!me.stopped && bufferedAhead() > maxAhead) await sleep(250);
+        while (!me.stopped && S.seekTo == null && bufferedAhead() > maxAhead) await sleep(250);
         if (me.stopped) return;
+        if (S.seekTo != null) continue;
+        const g = S.gen;
         try {
           const r = await get(seg.url, 'buf');
           if (me.stopped) return;
           if (seg.key) r.body = await decrypt(r.body, seg);
           if (me.stopped) return;
+          if (S.gen !== g || S.seekTo != null) continue; // a seek arrived while this segment loaded
           fails = 0;
           if (seg.disc) S.discPending = true;
           demux(r.body);
@@ -253,6 +293,7 @@ function workerMain() {
       if (me.stopped) return;
       const r = await get(S.mediaUrl, 'text');
       pl = parseM3U(r.body, r.base);
+      noteAvail();
     }
   }
 
@@ -263,7 +304,7 @@ function workerMain() {
     if (S.viaRelay || (S.httpsPage && /^http:/i.test(target))) target = S.relay + '/media?u=' + encodeURIComponent(S.url);
     const r = await fetch(target, { signal: S.ac.signal, cache: 'no-store', credentials: 'omit' });
     if (!r.ok) throw new Error('HTTP ' + r.status);
-    S.live = false;
+    S.live = false; S.progressive = true;
     const reader = r.body.getReader();
     let carry = new Uint8Array(0);
     for (;;) {
@@ -422,7 +463,7 @@ function workerMain() {
   function onAudio(pts, payload) {
     if (pts == null) return;
     const t0 = mapTime(pts);
-    if (S.dmx.atype === 'mp3') { S.aq.push({ t: t0, d: payload.slice() }); return; }
+    if (S.dmx.atype === 'mp3') { if (S.seekDrop == null || t0 >= S.seekDrop - 0.05) S.aq.push({ t: t0, d: payload.slice() }); return; }
     let i = 0, k = 0;
     while (i + 7 <= payload.length) {
       if (payload[i] !== 0xff || (payload[i + 1] & 0xf6) !== 0xf0) { i++; continue; }
@@ -432,14 +473,15 @@ function workerMain() {
       const rate = RATES[fi];
       if (len < 7 || i + len > payload.length || !rate) break;
       S.acfg = { aot: prof + 1, fi, ch: ch || 2, rate, hdr: prot ? 7 : 9 };
-      S.aq.push({ t: t0 + (k * 1024) / rate, d: payload.slice(i, i + len) });
+      const ft = t0 + (k * 1024) / rate;
+      if (S.seekDrop == null || ft >= S.seekDrop - 0.03) S.aq.push({ t: ft, d: payload.slice(i, i + len) });
       k++; i += len;
     }
   }
   function postAudio() {
     if (!S || !S.aq.length) return;
     const frames = S.aq; S.aq = [];
-    post({ t: 'audio', codec: S.dmx.atype, cfg: S.acfg || null, frames }, frames.map(f => f.d.buffer));
+    post({ t: 'audio', gen: S.gen, codec: S.dmx.atype, cfg: S.acfg || null, frames }, frames.map(f => f.d.buffer));
   }
 
   /* ---------------- decode + present ---------------- */
@@ -461,6 +503,7 @@ function workerMain() {
   }
   function onFrame(me, f) {
     if (me.stopped || S !== me) { f.close(); return; }
+    if (S.seekDrop != null && f.timestamp / 1e6 < S.seekDrop - 0.02) { f.close(); return; } // before the seek target
     if (!S.firstFrameAt) S.firstFrameAt = now();
     S.fq.push(f);
     if (S.fq.length > 1 && S.fq[S.fq.length - 2].timestamp > f.timestamp) S.fq.sort((a, b) => a.timestamp - b.timestamp);
@@ -477,28 +520,35 @@ function workerMain() {
   }
 
   function clock() {
+    if (S.paused) return S.pauseC;
     const t = now();
     if (S.hasAudio && S.aClock != null) {
       let c = S.aClock + (t - S.aAt) / 1000;
       const frozen = S.aEnd != null && c >= S.aEnd;
-      if (frozen) c = S.aEnd;
-      if (!frozen) { S.frozenSince = null; S.wall0 = null; S.clockSrc = 'audio'; return c; }
+      if (!frozen) { S.frozenSince = null; S.wall0 = null; S.wc = null; S.clockSrc = 'audio'; return c; }
+      c = S.aEnd;
       if (S.frozenSince == null) S.frozenSince = t;
       S.clockSrc = 'audio-stalled';
       if (t - S.frozenSince < 3000) return c;
-      S.clockSrc = 'wall';
-      if (S.wall0 == null) { S.wall0 = t; S.wallT0 = c; }
-      return S.wallT0 + (t - S.wall0) / 1000;
+      return wallClock(t, c); // audio stopped but the picture may go on (e.g. a stream that lost its sound)
     }
     if (S.hasAudio && S.firstFrameAt && t - S.firstFrameAt < 2500) return null; // give audio a moment to start
+    if (!S.fq.length && S.wall0 == null && S.wc == null) return null;
+    return wallClock(t, S.wc != null ? S.wc : S.fq[0].timestamp / 1e6);
+  }
+  // Wall-clock fallback. It holds still while there is nothing decoded to show, so a network stall
+  // pauses the picture instead of running the clock past the frames that are still on the way.
+  function wallClock(t, from) {
     S.clockSrc = 'wall';
-    if (!S.fq.length && S.wall0 == null) return null;
-    if (S.wall0 == null) { S.wall0 = t; S.wallT0 = S.fq[0].timestamp / 1e6; }
-    return S.wallT0 + (t - S.wall0) / 1000;
+    if (!S.fq.length) { if (S.wall0 != null) { S.wc = S.wallT0 + (t - S.wall0) / 1000; S.wall0 = null; } return S.wc != null ? S.wc : from; }
+    if (S.wall0 == null) { S.wall0 = t; S.wallT0 = S.wc != null ? S.wc : from; }
+    S.wc = S.wallT0 + (t - S.wall0) / 1000;
+    return S.wc;
   }
 
   function draw(f, keep) {
     const w = f.displayWidth, h = f.displayHeight;
+    S.lastShown = f.timestamp / 1e6;
     if (S.ctx) {
       if (S.canvas.width !== w || S.canvas.height !== h) { S.canvas.width = w; S.canvas.height = h; }
       S.ctx.drawImage(f, 0, 0, w, h);
@@ -524,9 +574,9 @@ function workerMain() {
     const t = now();
     if (t - S.statAt > 1000) {
       const fps = S.statFrames * 1000 / (t - S.statAt);
-      post({ t: 'stats', fps: Math.round(fps * 10) / 10, buffered: Math.round(bufferedAhead() * 10) / 10, dropped: S.dropped, frames: S.frames, clock: c, src: S.clockSrc || '', relay: S.viaRelay });
+      post({ t: 'stats', fps: Math.round(fps * 10) / 10, buffered: Math.round(bufferedAhead() * 10) / 10, dropped: S.dropped, frames: S.frames, clock: c, src: S.clockSrc || '', relay: S.viaRelay, paused: S.paused, avail: S.avail, plEnded: S.plEnded, live: S.live });
       S.statAt = t; S.statFrames = 0;
-      const bs = S.started && !S.fq.length && !S.vq.length && !S.eos ? 'buffering' : 'ok';
+      const bs = S.started && !S.paused && !S.fq.length && !S.vq.length && !S.eos ? 'buffering' : 'ok';
       if (bs !== S.lastBufState) { S.lastBufState = bs; post({ t: 'buffer', state: bs }); }
       if (!S.started && t - S.startedAt > 30000) { fatal('no picture after 30 s'); return; }
     }
@@ -545,8 +595,16 @@ let sharedCtx = null, workerUrl = null;
 
 function unlockAudio() {
   if (!AC) return null;
-  try { if (!sharedCtx) sharedCtx = new AC({ latencyHint: 'playback' }); } catch (_) { try { sharedCtx = new AC(); } catch (_) { return null; } }
-  if (sharedCtx.state === 'suspended') sharedCtx.resume().catch(() => {});
+  if (!sharedCtx) {
+    try { sharedCtx = new AC({ latencyHint: 'playback' }); } catch (_) { try { sharedCtx = new AC(); } catch (_) { return null; } }
+    sharedCtx.gtvPaused = false;
+    // the browser may suspend or interrupt audio on its own; take it back unless the user paused
+    sharedCtx.addEventListener('statechange', () => {
+      const c = sharedCtx;
+      if (!c.gtvPaused && c.state !== 'running' && c.state !== 'closed') setTimeout(() => { if (!c.gtvPaused && c.state !== 'running' && c.state !== 'closed') c.resume().catch(() => {}); }, 300);
+    });
+  }
+  if (sharedCtx.state !== 'running' && sharedCtx.state !== 'closed' && !sharedCtx.gtvPaused) sharedCtx.resume().catch(() => {});
   return sharedCtx;
 }
 
@@ -561,15 +619,43 @@ function isCarBrowser() {
   return /X11; ?Linux x86_64/.test(ua) && /Chrome\//.test(ua) && !/Android|CrOS/.test(ua);
 }
 
+// Decoded audio waits in a queue and is handed to Web Audio just in time (about one second ahead),
+// joined into ~0.5 s buffers. Scheduling every 21 ms AAC frame as soon as it was decoded left
+// 1000+ pending AudioBufferSourceNodes when the buffer ran 30 s ahead; Chrome processes every
+// pending node on each render quantum, which overloads the audio thread on a slow car computer
+// and the sound drops out while the picture keeps going.
+const LOOKAHEAD = 1.5, MERGE = 0.5;
+function pcmPlanes(d) {
+  const n = d.numberOfFrames, nc = d.numberOfChannels, out = [];
+  try {
+    for (let c = 0; c < nc; c++) { const a = new Float32Array(n); d.copyTo(a, { planeIndex: c, format: 'f32-planar' }); out.push(a); }
+    return out;
+  } catch (_) { out.length = 0; }
+  // older engines cannot convert in copyTo: read the native format and convert here
+  const f = d.format || 'f32', planar = /-planar$/.test(f);
+  const T = /^s16/.test(f) ? Int16Array : /^s32/.test(f) ? Int32Array : /^u8/.test(f) ? Uint8Array : Float32Array;
+  const conv = T === Int16Array ? v => v / 32768 : T === Int32Array ? v => v / 2147483648 : T === Uint8Array ? v => (v - 128) / 128 : v => v;
+  if (planar) {
+    for (let c = 0; c < nc; c++) { const b = new T(n); d.copyTo(b, { planeIndex: c }); const a = new Float32Array(n); for (let i = 0; i < n; i++) a[i] = conv(b[i]); out.push(a); }
+  } else {
+    const b = new T(n * nc); d.copyTo(b, { planeIndex: 0 });
+    for (let c = 0; c < nc; c++) { const a = new Float32Array(n); for (let i = 0; i < n; i++) a[i] = conv(b[i * nc + c]); out.push(a); }
+  }
+  return out;
+}
+
 class AudioOut {
   constructor(ctx, onFail) {
     this.ctx = ctx; this.onFail = onFail; this.gain = ctx.createGain(); this.gain.connect(ctx.destination);
-    this.srcs = new Set(); this.anchor = null; this.endMedia = null; this.dec = null; this.decKey = '';
+    this.srcs = new Set(); this.q = []; this.anchor = null; this.endMedia = null; this.schedEnd = null; this.lastMediaEnd = null;
+    this.dec = null; this.decKey = ''; this.gen = 0; this.pcmFails = 0;
     this.chain = Promise.resolve(); this.closed = false; this.useDecoder = typeof global.AudioDecoder === 'function';
-    this.fails = 0;
+    this.fails = 0; this.st = { pushed: 0, decoded: 0, scheduled: 0, underruns: 0, dropped: 0 };
+    this.timer = setInterval(() => this.pump(), 50);
   }
   push(m) {
-    if (this.closed || !m.frames.length) return;
+    if (this.closed || !m.frames.length || (m.gen || 0) !== this.gen) return;
+    this.st.pushed += m.frames.length;
     if (m.codec === 'aac' && m.cfg && this.useDecoder && this.ensureDecoder(m.cfg)) {
       for (const f of m.frames) {
         try { this.dec.decode(new EncodedAudioChunk({ type: 'key', timestamp: Math.round(f.t * 1e6), data: new Uint8Array(f.d).subarray(m.cfg.hdr) })); }
@@ -581,9 +667,12 @@ class AudioOut {
     const total = m.frames.reduce((n, f) => n + f.d.byteLength, 0);
     const all = new Uint8Array(total); let o = 0;
     for (const f of m.frames) { all.set(new Uint8Array(f.d), o); o += f.d.byteLength; }
-    const t0 = m.frames[0].t;
-    this.chain = this.chain.then(() => this.closed ? null : this.ctx.decodeAudioData(all.buffer).then(buf => this.schedule(buf, t0)))
-      .catch(() => { if (++this.fails >= 3 && this.onFail) { this.onFail(); this.onFail = null; } });
+    const t0 = m.frames[0].t, gen = this.gen;
+    this.chain = this.chain.then(() => this.closed ? null : this.ctx.decodeAudioData(all.buffer).then(buf => {
+      if (gen !== this.gen || this.closed) return;
+      const planes = []; for (let c = 0; c < buf.numberOfChannels; c++) planes.push(buf.getChannelData(c));
+      this.enqueue(t0, planes, buf.sampleRate);
+    })).catch(() => { if (++this.fails >= 3 && this.onFail) { this.onFail(); this.onFail = null; } });
   }
   ensureDecoder(cfg) {
     const key = cfg.aot + '/' + cfg.fi + '/' + cfg.ch;
@@ -591,8 +680,9 @@ class AudioOut {
     try {
       if (this.dec && this.dec.state !== 'closed') this.dec.close();
       const asc = new Uint8Array([(cfg.aot << 3) | (cfg.fi >> 1), ((cfg.fi & 1) << 7) | (cfg.ch << 3)]);
+      const gen = this.gen;
       this.dec = new AudioDecoder({
-        output: d => this.onData(d),
+        output: d => this.onData(d, gen),
         error: () => { this.useDecoder = false; },
       });
       this.dec.configure({ codec: 'mp4a.40.' + cfg.aot, sampleRate: cfg.rate, numberOfChannels: cfg.ch, description: asc });
@@ -600,35 +690,87 @@ class AudioOut {
       return true;
     } catch (_) { this.useDecoder = false; return false; }
   }
-  onData(d) {
+  onData(d, gen) {
     try {
-      if (this.closed) return;
-      const buf = this.ctx.createBuffer(d.numberOfChannels, d.numberOfFrames, d.sampleRate);
-      for (let c = 0; c < d.numberOfChannels; c++) d.copyTo(buf.getChannelData(c), { planeIndex: c, format: 'f32-planar' });
-      this.schedule(buf, d.timestamp / 1e6);
-    } catch (_) {} finally { d.close(); }
+      if (this.closed || gen !== this.gen) return;
+      const planes = pcmPlanes(d);
+      this.pcmFails = 0;
+      this.enqueue(d.timestamp / 1e6, planes, d.sampleRate);
+    } catch (_) {
+      if (++this.pcmFails >= 5) this.useDecoder = false; // cannot read decoder output: use decodeAudioData instead
+    } finally { d.close(); }
   }
-  schedule(buf, t) {
-    if (this.closed) return;
-    const ctx = this.ctx, nowT = ctx.currentTime;
-    let when = this.anchor ? this.anchor.ctx + (t - this.anchor.media) : -1;
-    if (!this.anchor || when < nowT - 0.02 || when > nowT + 90) {
-      this.anchor = { ctx: nowT + 0.25, media: t }; when = this.anchor.ctx; // (re)start the clock here
-    }
-    const src = ctx.createBufferSource(); src.buffer = buf; src.connect(this.gain); src.start(when);
-    this.srcs.add(src); src.onended = () => this.srcs.delete(src);
-    const end = t + buf.duration;
+  enqueue(t, planes, rate) {
+    if (!planes.length || !planes[0].length) return;
+    const it = { t, planes, rate, dur: planes[0].length / rate };
+    const q = this.q;
+    if (!q.length || q[q.length - 1].t <= t) q.push(it);
+    else { let i = q.length; while (i > 0 && q[i - 1].t > t) i--; q.splice(i, 0, it); }
+    this.st.decoded++;
+    const end = t + it.dur;
     if (this.endMedia == null || end > this.endMedia) this.endMedia = end;
+    if (this.schedEnd == null || this.schedEnd < this.ctx.currentTime + 0.2) this.pump();
+  }
+  pump() {
+    if (this.closed || !this.q.length || this.ctx.state !== 'running') return;
+    const ctx = this.ctx, q = this.q;
+    for (;;) {
+      const nowT = ctx.currentTime;
+      if (!q.length || (this.schedEnd != null && this.schedEnd > nowT + LOOKAHEAD)) return;
+      const a = q[0];
+      // already covered by audio we scheduled (overlap / duplicate): drop or trim it
+      let skip = this.lastMediaEnd != null ? this.lastMediaEnd - a.t : 0;
+      if (skip >= a.dur - 1e-4) { q.shift(); this.st.dropped++; continue; }
+      if (skip < 0.002) skip = 0;
+      let when = this.anchor ? this.anchor.ctx + (a.t + skip - this.anchor.media) : -1;
+      if (!this.anchor || when < nowT + 0.005) {
+        // first audio, or we ran dry: (re)start the audio clock with this chunk
+        if (this.anchor) this.st.underruns++;
+        this.anchor = { ctx: nowT + 0.08, media: a.t + skip }; when = this.anchor.ctx;
+      }
+      // join back-to-back chunks into one buffer
+      const nc = a.planes.length, rate = a.rate, parts = [a];
+      let frames = a.planes[0].length, endT = a.t + a.dur;
+      q.shift();
+      while (q.length && frames / rate < MERGE) {
+        const b = q[0];
+        if (b.rate !== rate || b.planes.length !== nc || Math.abs(b.t - endT) > 0.004) break;
+        parts.push(b); frames += b.planes[0].length; endT = b.t + b.dur; q.shift();
+      }
+      const buf = ctx.createBuffer(nc, frames, rate);
+      for (let c = 0; c < nc; c++) {
+        const dst = buf.getChannelData(c); let o = 0;
+        for (const p of parts) { dst.set(p.planes[c], o); o += p.planes[c].length; }
+      }
+      const src = ctx.createBufferSource(); src.buffer = buf; src.connect(this.gain);
+      src.start(when, skip);
+      this.srcs.add(src); src.onended = () => { this.srcs.delete(src); try { src.disconnect(); } catch (_) {} };
+      this.st.scheduled++;
+      this.schedEnd = when + buf.duration - skip;
+      this.lastMediaEnd = a.t + buf.duration;
+    }
   }
   clock() {
     if (!this.anchor || this.closed) return null;
     const lat = this.ctx.outputLatency || this.ctx.baseLatency || 0;
     return { m: this.anchor.media + (this.ctx.currentTime - lat - this.anchor.ctx), end: this.endMedia };
   }
-  close() {
-    this.closed = true;
+  info() {
+    return Object.assign({ ctx: this.ctx.state, t: +this.ctx.currentTime.toFixed(2), queued: this.q.length, live: this.srcs.size,
+      ahead: this.schedEnd == null ? 0 : +(this.schedEnd - this.ctx.currentTime).toFixed(2), path: this.useDecoder ? 'AudioDecoder' : 'decodeAudioData' }, this.st);
+  }
+  flush() {
+    this.gen++;
     for (const s of this.srcs) { try { s.stop(); } catch (_) {} }
-    this.srcs.clear();
+    this.srcs.clear(); this.q = []; this.anchor = null; this.endMedia = null; this.schedEnd = null; this.lastMediaEnd = null;
+    try { if (this.dec && this.dec.state !== 'closed') this.dec.close(); } catch (_) {}
+    this.dec = null; this.decKey = '';
+    return this.gen;
+  }
+  close() {
+    this.closed = true; clearInterval(this.timer);
+    for (const s of this.srcs) { try { s.stop(); } catch (_) {} }
+    this.srcs.clear(); this.q = [];
     try { this.gain.disconnect(); } catch (_) {}
     try { if (this.dec && this.dec.state !== 'closed') this.dec.close(); } catch (_) {}
   }
@@ -636,7 +778,8 @@ class AudioOut {
 
 function create(canvasEl, cb = {}) {
   let canvas = canvasEl, worker = null, audio = null, clockTimer = null, ctx2d = null;
-  const p = { playing: false, currentTime: 0, stats: null, info: {}, get canvas() { return canvas; } };
+  const p = { playing: false, paused: false, currentTime: 0, stats: null, info: {}, live: true, seekable: 0, complete: false,
+    get canvas() { return canvas; } };
 
   function freshCanvas() {
     // a canvas can hand its drawing surface to a worker only once, so swap in a clone each start
@@ -656,8 +799,8 @@ function create(canvasEl, cb = {}) {
     const w = worker;
     if (actx) audio = new AudioOut(actx, () => { if (worker === w) w.postMessage({ t: 'audioFailed' }); });
     const a = audio;
-    p.playing = false; p.currentTime = 0; p.info = {};
-    let t0 = null;
+    p.playing = false; p.paused = false; p.currentTime = 0; p.info = {}; p.live = true; p.seekable = 0; p.complete = false;
+    if (actx) actx.gtvPaused = false;
     w.onmessage = e => {
       if (worker !== w) return;
       const m = e.data;
@@ -669,11 +812,12 @@ function create(canvasEl, cb = {}) {
         case 'playing': p.playing = true; cb.onPlaying && cb.onPlaying(m); break;
         case 'stats':
           p.stats = m;
-          if (m.clock != null) { if (t0 == null) t0 = m.clock; p.currentTime = m.clock - t0; }
+          if (m.clock != null && !p.seeking) p.currentTime = Math.max(0, m.clock);
+          p.live = !!m.live; p.seekable = m.avail || 0; p.complete = !!m.plEnded;
           cb.onInfo && cb.onInfo({ stats: m });
           break;
         case 'info': Object.assign(p.info, m); delete p.info.t; cb.onInfo && cb.onInfo(m); break;
-        case 'buffer': cb.onInfo && cb.onInfo({ buffer: m.state }); break;
+        case 'buffer': if (m.state === 'ok') p.seeking = false; cb.onInfo && cb.onInfo({ buffer: m.state }); break;
         case 'ended': p.playing = false; teardown(); cb.onEnded && cb.onEnded(); break;
         case 'error': p.playing = false; teardown(); cb.onError && cb.onError(m.msg || 'playback error'); break;
       }
@@ -695,10 +839,33 @@ function create(canvasEl, cb = {}) {
     worker = null;
     if (audio) { audio.close(); audio = null; }
   }
-  p.stop = function () { teardown(); p.playing = false; };
+  p.stop = function () { teardown(); p.playing = false; p.paused = false; if (sharedCtx) sharedCtx.gtvPaused = false; };
+  // pause / resume: the audio clock stops (AudioContext suspended), so the picture holds too
+  p.pause = function () {
+    if (!worker || p.paused) return;
+    p.paused = true; worker.postMessage({ t: 'pause', on: true });
+    if (audio) { audio.ctx.gtvPaused = true; audio.ctx.suspend().catch(() => {}); }
+  };
+  p.resume = function () {
+    if (!worker || !p.paused) return;
+    p.paused = false;
+    if (audio) { audio.ctx.gtvPaused = false; audio.ctx.resume().catch(() => {}); }
+    worker.postMessage({ t: 'pause', on: false });
+  };
+  // seek to a media time (seconds from the start of this stream). Works on finished or growing
+  // (EVENT) playlists inside what the playlist already lists; p.seekable is how far that goes.
+  p.seek = function (to) {
+    if (!worker || p.live) return false;
+    to = Math.max(0, Math.min(+to || 0, p.seekable ? p.seekable - 0.5 : +to || 0));
+    const gen = audio ? audio.flush() : 0;
+    worker.postMessage({ t: 'seek', to, gen });
+    p.currentTime = to; p.seeking = true;
+    return true;
+  };
+  p.audioInfo = () => audio ? audio.info() : null;
   p.destroy = p.stop;
   return p;
 }
 
-global.CanvasPlayer = { version: '1.0.0', supported, isCarBrowser, unlockAudio, create };
+global.CanvasPlayer = { version: '1.1.0', supported, isCarBrowser, unlockAudio, create };
 })(window);

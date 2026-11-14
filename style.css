@@ -266,6 +266,27 @@ canvas.cv { display: block; width: 100%; height: 100%; object-fit: contain; back
 .yt-player-box #yt-cv { position: absolute; inset: 0; display: none; }
 .yt-player-box.cv-mode #yt-cv { display: block; }
 .yt-player-box.cv-mode iframe, .yt-player-box.cv-mode #yt-player { display: none; }
+/* drive-mode player controls (canvas player): big touch targets, auto-hide like the live overlay */
+.cv-ctl { position: absolute; inset: 0; display: none; flex-direction: column; justify-content: flex-end; transition: opacity .25s;
+  background: linear-gradient(transparent 55%, rgba(0,0,0,.75)); }
+.yt-player-box.cv-mode .cv-ctl { display: flex; }
+.cv-ctl.hide { opacity: 0; }
+.cv-ctl.hide * { pointer-events: none; }
+.cv-ctl-mid { flex: 1; display: flex; align-items: center; justify-content: center; gap: 48px; }
+.cv-ctl-bar { display: flex; align-items: center; gap: 14px; padding: 10px 16px 12px; }
+.btn.cbtn { display: inline-flex; align-items: center; justify-content: center; gap: 2px; padding: 0; width: 84px; height: 84px;
+  border-radius: 50%; background: rgba(12,14,18,.6); border-color: rgba(255,255,255,.25); color: #fff; position: relative; }
+.btn.cbtn.big { width: 108px; height: 108px; }
+.btn.cbtn.sm { width: 64px; height: 64px; border-radius: 12px; }
+.cbtn .ci { width: 58%; height: 58%; fill: currentColor; }
+.cbtn.big .ci { width: 46%; height: 46%; }
+.cbtn .cn { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -36%); font-size: 13px; font-weight: 800; }
+.cbtn .i-play { display: none; }
+.cbtn.paused .i-play { display: inline; }
+.cbtn.paused .i-pause { display: none; }
+.cv-time { color: #fff; font-variant-numeric: tabular-nums; font-size: 18px; min-width: 64px; text-align: center; text-shadow: 0 1px 2px #000; }
+.cv-seek { flex: 1; height: 44px; accent-color: var(--accent); cursor: pointer; }
+#player-pp { align-self: center; }
 .yt-list { display: flex; flex-direction: column; gap: 8px; max-height: calc(100vh - 110px); overflow-y: auto; }
 .yt-item { display: flex; gap: 12px; align-items: center; padding: 6px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); cursor: pointer; text-align: left; min-height: var(--tap); }
 .yt-item.active { border-color: var(--accent); background: var(--accent-dim); }
